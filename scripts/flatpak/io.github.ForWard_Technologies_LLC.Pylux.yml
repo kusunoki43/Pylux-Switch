@@ -1,17 +1,15 @@
-# Pylux Flatpak manifest — source of truth lives in the Pylux repo.
-# The deploy-flatpak.yml workflow auto-syncs this to flathub/io.github.ForWard_Technologies_LLC.Pylux.
-#
-# Based on the live Flathub chiaki-ng manifest (runtime 6.9, SDL3, etc.)
+# Pylux Flatpak manifest — keep in sync with the Flathub submission branch:
+#   https://github.com/ForWard-Technologies-LLC/flathub/blob/add-pylux/io.github.ForWard_Technologies_LLC.Pylux.yml
+# deploy-flatpak.yml builds from local checkout (dir source) for CI; Flathub PR pins git commit.
 
 app-id: io.github.ForWard_Technologies_LLC.Pylux
 runtime: org.kde.Platform
-runtime-version: '6.9'
+runtime-version: '6.10'
 sdk: org.kde.Sdk
 base: io.qt.qtwebengine.BaseApp
-base-version: '6.9'
+base-version: '6.10'
 command: chiaki
 rename-icon: chiaking
-separate-locales: false
 finish-args:
   - --share=network
   - --share=ipc
@@ -21,42 +19,31 @@ finish-args:
   - --allow=bluetooth
   - --socket=pulseaudio
   - --env=QTWEBENGINEPROCESS_PATH=/app/bin/QtWebEngineProcess
-  - --env=LD_LIBRARY_PATH=/app/lib:/app/lib64
   - --env=DBUS_FATAL_WARNINGS=0
   - --env=QML_DISABLE_DISK_CACHE=1
   - --env=SDL_AUDIODRIVER=pipewire
-  - --talk-name=org.freedesktop.ScreenSaver
   - --system-talk-name=org.freedesktop.login1
   - --filesystem=xdg-run/pipewire-0
   - --filesystem=xdg-run/gamescope-0
-  - --filesystem=host-os:ro
   - --filesystem=xdg-download
-  - --filesystem=xdg-documents
   - --filesystem=~/.steam/steam
+
+cleanup:
+  - /include
+  - /lib/cmake
+  - /lib/pkgconfig
+  - /lib/*.la
 
 cleanup-commands:
   - /app/cleanup-BaseApp.sh
-
-build-options:
-  arch:
-    aarch64:
-      prepend-pkg-config-path: "/app/lib/pkgconfig:/app/lib64/pkgconfig:/app/lib/aarch64-linux-gnu/pkgconfig:/app/lib64/aarch64-linux-gnu/pkgconfig"
-    x86_64:
-      prepend-pkg-config-path: "/app/lib/pkgconfig:/app/lib64/pkgconfig:/app/lib/x86_64-linux-gnu/pkgconfig:/app/lib64/x86_64-linux-gnu/pkgconfig"
 
 modules:
   - name: protobuf-compilers
     buildsystem: cmake-ninja
     config-opts:
       - -Dprotobuf_BUILD_TESTS=OFF
-      - -Dprotobuf_BUILD_SHARED_LIBS=OFF
-      - -Dprotobuf_BUILD_PROTOBUF_BINARIES=ON
+      - -Dprotobuf_BUILD_SHARED_LIBS=ON
       - -Dprotobuf_BUILD_EXAMPLES=OFF
-    cleanup:
-      - /include
-      - /lib/*.a
-      - /lib/cmake
-      - /lib/pkgconfig
     sources:
       - type: archive
         url: https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protobuf-cpp-3.21.12.tar.gz
@@ -67,39 +54,11 @@ modules:
     config-opts:
       - -Dvulkan=enabled
       - -Dshaderc=enabled
-    cleanup:
-      - /include
-      - /lib/pkgconfig
     sources:
       - type: git
         url: https://github.com/haasn/libplacebo
         tag: v7.360.1
-
-  - name: ffmpeg
-    cleanup:
-      - /bin/ffmpeg
-      - /lib/*.so
-      - /include
-      - /lib/pkgconfig
-      - /share/ffmpeg/examples
-      - /share/ffmpeg
-    config-opts:
-      - --disable-all
-      - --enable-libdrm
-      - --enable-avcodec
-      - --enable-vulkan
-      - --enable-decoder=h264
-      - --enable-decoder=hevc
-      - --enable-hwaccel=h264_vaapi
-      - --enable-hwaccel=hevc_vaapi
-      - --enable-hwaccel=h264_vulkan
-      - --enable-hwaccel=hevc_vulkan
-    sources:
-      - type: archive
-        url: https://ffmpeg.org/releases/ffmpeg-7.1.tar.xz
-        sha256: 40973d44970dbc83ef302b0609f2e74982be2d85916dd2ee7472d30678a7abe6
-      - type: patch
-        path: 0001-vulkan-ignore-frames-without-hw-context.patch
+        commit: cee9b076f2c63104ccfd497fa79c39a867293ec4
 
   - name: python3-google
     buildsystem: simple
@@ -125,27 +84,6 @@ modules:
         url: https://files.pythonhosted.org/packages/ba/dd/f8a01b146bf45ac12a829bbc599e6590aa6a6849ace7d28c42d77041d6ab/protobuf-4.21.12.tar.gz
         sha256: 7cd532c4566d0e6feafecc1059d04c7915aec8e182d1cf7adee8b24ef1e2e6ab
 
-  - name: python3-requests
-    buildsystem: simple
-    build-commands:
-      - "pip3 install --no-index --find-links=\"file://${PWD}\" --prefix=${FLATPAK_DEST} --no-build-isolation requests"
-    sources:
-      - type: file
-        url: https://files.pythonhosted.org/packages/ea/b7/e0e3c1c467636186c39925827be42f16fee389dc404ac29e930e9136be70/idna-2.10.tar.gz
-        sha256: b307872f855b18632ce0c21c5e45be78c0ea7ae4c15c828c20788b26921eb3f6
-      - type: file
-        url: https://files.pythonhosted.org/packages/da/67/672b422d9daf07365259958912ba533a0ecab839d4084c487a5fe9a5405f/requests-2.24.0.tar.gz
-        sha256: b3559a131db72c33ee969480840fff4bb6dd111de7dd27c8ee1f820f4f00231b
-      - type: file
-        url: https://files.pythonhosted.org/packages/40/a7/ded59fa294b85ca206082306bba75469a38ea1c7d44ea7e1d64f5443d67a/certifi-2020.6.20.tar.gz
-        sha256: 5930595817496dd21bb8dc35dad090f1c2cd0adfaf21204bf6732ca5d8ee34d3
-      - type: file
-        url: https://files.pythonhosted.org/packages/81/f4/87467aeb3afc4a6056e1fe86626d259ab97e1213b1dfec14c7cb5f538bf0/urllib3-1.25.10.tar.gz
-        sha256: 91056c15fa70756691db97756772bb1eb9678fa585d9184f24534b100dc60f4a
-      - type: file
-        url: https://files.pythonhosted.org/packages/fc/bb/a5768c230f9ddb03acc9ef3f0d4a3cf93462473795d18e9535498c8f929d/chardet-3.0.4.tar.gz
-        sha256: 84ab92ed1c4d4f16916e05906b6b75a6c0fb5db821cc65e70cbd64a3e2a5eaae
-
   - name: hidapi
     buildsystem: cmake-ninja
     config-opts:
@@ -154,29 +92,25 @@ modules:
       - type: git
         url: https://github.com/libusb/hidapi.git
         tag: hidapi-0.15.0
-    cleanup:
-      - /lib/*.la
-      - /lib/pkgconfig
-      - /include
+        commit: d6b2a974608dec3b76fb1e36c189f22b9cf3650c
 
   - name: speexDSP
-    buildsystem: simple
-    build-commands:
-      - ./autogen.sh
-      - ./configure --prefix=/app
-      - make
-      - make install
+    buildsystem: autotools
     sources:
       - type: git
         url: https://gitlab.xiph.org/xiph/speexdsp.git
         tag: SpeexDSP-1.2.1
+        commit: 1b28a0f61bc31162979e1f26f3981fc3637095c8
 
   - name: json-c
     buildsystem: cmake-ninja
+    config-opts:
+      - -DBUILD_APPS=OFF
     sources:
       - type: git
         url: https://github.com/json-c/json-c.git
         tag: json-c-0.18-20240915
+        commit: 41a55cfcedb54d9c1874f2f0eb07b504091d7e37
 
   - name: miniupnpc
     buildsystem: cmake-ninja
@@ -185,43 +119,14 @@ modules:
       - type: git
         url: https://github.com/miniupnp/miniupnp
         tag: miniupnpc_2_3_0
-
-  - name: SDL3
-    buildsystem: cmake-ninja
-    config-opts:
-      - -DSDL_TESTS=OFF
-      - -DSDL_EXAMPLES=OFF
-      - -DCMAKE_INSTALL_LIBDIR=lib
-    sources:
-      - type: git
-        url: https://github.com/libsdl-org/SDL.git
-        tag: release-3.4.0
-
-  - name: sdl2-compat
-    sources:
-      - type: git
-        url: https://github.com/libsdl-org/sdl2-compat
-        tag: release-2.32.64
-    buildsystem: cmake-ninja
-    config-opts:
-      - -DSDL2COMPAT_TESTS=OFF
-      - -DCMAKE_INSTALL_LIBDIR=lib
-    post-install:
-      - mv /app/lib/pkgconfig/sdl2-compat.pc /app/lib/pkgconfig/sdl2.pc
-
-  - name: vulkanso
-    buildsystem: simple
-    build-commands:
-      - ln -s /usr/lib/$(uname -m)-linux-gnu/libvulkan.so.1 /app/lib/libvulkan.so
+        commit: f39e4997591a98e7ee6711eabc8b50feeef1bd67
 
   - name: pylux
     buildsystem: cmake-ninja
     builddir: true
+    config-opts:
+      - -DCHIAKI_ENABLE_TESTS=OFF
     sources:
       - type: git
         url: https://github.com/ForWard-Technologies-LLC/Pylux.git
-        commit: 6855bf2386686843bd27a59805deb1f27a537d0e
-    post-install:
-      - install -Dm755 ../scripts/psn-account-id.py /app/bin/psn-account-id
-      - install -Dm755 ../scripts/vulkan-gamescope-layers/VkLayer_FROG_gamescope_wsi.x86_64.json
-        /app/share/vulkan/implicit_layer.d/VkLayer_FROG_gamescope_wsi.x86_64.json
+        commit: 072ebfadceb2bdf24eb262f3f9fa3969259f69ae

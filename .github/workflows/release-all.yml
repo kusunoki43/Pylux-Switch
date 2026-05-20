@@ -67,6 +67,8 @@ jobs:
           IOS_UPLOAD_OK: ${{ needs.ios.outputs.ios_upload_succeeded }}
           MACOS_UPLOAD_OK: ${{ needs.macos.outputs.macos_upload_succeeded }}
           FLATPAK_OK: ${{ needs.flatpak.outputs.flatpak_build_succeeded }}
+          FLATPAK_URL: ${{ needs.flatpak.outputs.flatpak_url }}
+          FLATPAK_INSTALL: ${{ needs.flatpak.outputs.flatpak_install_command }}
         run: |
           set -euo pipefail
           VER="${{ steps.version.outputs.version }}"
@@ -142,19 +144,25 @@ jobs:
 
             echo "### Linux (Dropbox)"
             echo ""
-            echo "**Downloads:** [Portable zip](${LINUX_ZIP:-#}) · [AppImage](${LINUX_AI:-#})"
+            echo "**Downloads:** [Portable zip](${LINUX_ZIP:-#}) · [AppImage](${LINUX_AI:-#}) · [Flatpak bundle](${FLATPAK_URL:-#})"
             echo ""
             if [ "$REF_NAME" = "release/beta" ]; then
-              echo "Beta rolling filenames: \`pylux-beta-latest.zip\`, \`pylux-beta-latest.AppImage\` (stable \`pylux-latest\` paths are not overwritten)."
+              echo "Beta rolling filenames: \`pylux-beta-latest.zip\`, \`pylux-beta-latest.AppImage\`, \`pylux-beta-latest.flatpak\` (stable \`pylux-latest\` paths are not overwritten)."
               echo ""
             fi
             echo "- **Portable zip** — unzip and run \`launch.sh\` (recommended for Steam). The launch script sets up bundled libs and the OpenSSL fallback automatically."
             echo "- **AppImage** — make executable and run directly. Set \`APPIMAGE_EXTRACT_AND_RUN=1\` if Steam misbehaves."
+            echo "- **Flatpak (interim, until Flathub is live)** — install runtimes from Flathub, then:"
+            echo '  ```bash'
+            echo "  ${FLATPAK_INSTALL:-flatpak install --user pylux-latest.flatpak}"
+            echo "  flatpak run io.github.ForWard_Technologies_LLC.Pylux"
+            echo '  ```'
+            echo "  To update: run the same \`flatpak install\` line again when a new bundle is published (no \`flatpak update\` until Flathub listing)."
             echo ""
 
-            echo "### Flatpak"
+            echo "### Flatpak (Flathub)"
             echo ""
-            echo "**Get it:** [Flathub — io.github.ForWard_Technologies_LLC.Pylux](${FLATHUB_URL})"
+            echo "**When approved:** [Flathub — io.github.ForWard_Technologies_LLC.Pylux](${FLATHUB_URL}) — \`flatpak install flathub io.github.ForWard_Technologies_LLC.Pylux\`"
             echo ""
             echo "- **CI verify build succeeded:** ${FLATPAK_OK}"
           } > "$NOTES_FILE"
