@@ -24,8 +24,11 @@ on:
         description: Dropbox direct URL for rolling flatpak bundle (dl=1)
         value: ${{ jobs.build-and-verify.outputs.flatpak_url }}
       flatpak_install_command:
-        description: One-liner to install the Dropbox-hosted bundle
+        description: Download and install the Dropbox-hosted bundle
         value: ${{ jobs.build-and-verify.outputs.flatpak_install_command }}
+      flatpak_run_command:
+        description: Launch Pylux after install
+        value: ${{ jobs.build-and-verify.outputs.flatpak_run_command }}
 
 concurrency:
   group: deploy-flatpak-${{ github.ref }}
@@ -39,7 +42,8 @@ jobs:
       chiaki_version: ${{ steps.extract_version.outputs.version }}
       flatpak_build_succeeded: ${{ steps.flatpak_build.outcome == 'success' }}
       flatpak_url: ${{ steps.flatpak_dropbox.outputs.url }}
-      flatpak_install_command: ${{ steps.flatpak_install_cmd.outputs.command }}
+      flatpak_install_command: ${{ steps.flatpak_install_cmd.outputs.install }}
+      flatpak_run_command: ${{ steps.flatpak_install_cmd.outputs.run }}
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.10
       options: --privileged
@@ -86,8 +90,16 @@ jobs:
         id: flatpak_install_cmd
         if: steps.flatpak_dropbox.outcome == 'success'
         run: |
-          CMD="flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo && flatpak install --user -y \"${{ steps.flatpak_dropbox.outputs.url }}\""
-          echo "command=${CMD}" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.ref_name }}" = "release/beta" ]; then
+            BUNDLE="pylux-beta-latest.flatpak"
+          else
+            BUNDLE="pylux-latest.flatpak"
+          fi
+          URL="${{ steps.flatpak_dropbox.outputs.url }}"
+          INSTALL="curl -fsSL -o ${BUNDLE} \"${URL}\" && flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo && flatpak install --user -y ${BUNDLE}"
+          RUN="flatpak run io.github.ForWard_Technologies_LLC.Pylux"
+          echo "install=${INSTALL}" >> "$GITHUB_OUTPUT"
+          echo "run=${RUN}" >> "$GITHUB_OUTPUT"
 
       - name: Build summary
         if: always()
@@ -106,17 +118,26 @@ jobs:
               echo "| --- | --- | --- | --- |"
               echo "| Flatpak bundle | ${FP_SIZE:-?} | [${ROLLING_NAME}](${{ steps.flatpak_dropbox.outputs.url }}) | \`/pylux/linux/pylux-${CHIAKI_VERSION}.flatpak\` |"
               echo ""
-              echo "### Install (until Flathub is approved)"
-              echo "Users need the Flathub remote for KDE/Qt runtimes. First time may prompt for dependencies (same idea as a Flathub test build)."
-              echo ""
-              echo '```bash'
-              echo "flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo"
-              echo "flatpak install --user -y \"${{ steps.flatpak_dropbox.outputs.url }}\""
-              echo "flatpak run io.github.ForWard_Technologies_LLC.Pylux"
-              echo '```'
-              echo ""
-              echo "### Update an existing Dropbox install"
-              echo "Re-run the \`flatpak install\` line above with the new URL (or download the new \`.flatpak\` and install again). There is no \`flatpak update\` channel until the app is on Flathub."
+              if [ "${{ steps.flatpak_dropbox.outcome }}" = "success" ]; then
+                echo "### Install (until Flathub is approved)"
+                echo "Download and install from the local file (Flatpak cannot install directly from a Dropbox URL):"
+                echo ""
+                echo '```bash'
+                echo "${{ steps.flatpak_install_cmd.outputs.install }}"
+                echo '```'
+                echo ""
+                echo "### Run"
+                echo ""
+                echo '```bash'
+                echo "${{ steps.flatpak_install_cmd.outputs.run }}"
+                echo '```'
+                echo ""
+                echo "### Update an existing Dropbox install"
+                echo "Run the install command again when a new bundle is published. There is no \`flatpak update\` channel until the app is on Flathub."
+              else
+                echo "### Install"
+                echo "Dropbox publish did not succeed — no install one-liner. Fix the publish step above."
+              fi
               echo ""
               echo "### Once on Flathub"
               echo "\`flatpak install flathub io.github.ForWard_Technologies_LLC.Pylux\` — then \`flatpak update\` works normally."

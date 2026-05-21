@@ -69,6 +69,7 @@ jobs:
           FLATPAK_OK: ${{ needs.flatpak.outputs.flatpak_build_succeeded }}
           FLATPAK_URL: ${{ needs.flatpak.outputs.flatpak_url }}
           FLATPAK_INSTALL: ${{ needs.flatpak.outputs.flatpak_install_command }}
+          FLATPAK_RUN: ${{ needs.flatpak.outputs.flatpak_run_command }}
         run: |
           set -euo pipefail
           VER="${{ steps.version.outputs.version }}"
@@ -152,12 +153,22 @@ jobs:
             fi
             echo "- **Portable zip** — unzip and run \`launch.sh\` (recommended for Steam). The launch script sets up bundled libs and the OpenSSL fallback automatically."
             echo "- **AppImage** — make executable and run directly. Set \`APPIMAGE_EXTRACT_AND_RUN=1\` if Steam misbehaves."
-            echo "- **Flatpak (interim, until Flathub is live)** — install runtimes from Flathub, then:"
+            if [ "$REF_NAME" = "release/beta" ]; then
+              FP_BUNDLE="pylux-beta-latest.flatpak"
+            else
+              FP_BUNDLE="pylux-latest.flatpak"
+            fi
+            FP_INSTALL="${FLATPAK_INSTALL:-curl -fsSL -o ${FP_BUNDLE} \"${FLATPAK_URL}\" && flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo && flatpak install --user -y ${FP_BUNDLE}}"
+            FP_RUN="${FLATPAK_RUN:-flatpak run io.github.ForWard_Technologies_LLC.Pylux}"
+            echo "- **Flatpak (interim, until Flathub is live)** — install:"
             echo '  ```bash'
-            echo "  ${FLATPAK_INSTALL:-flatpak install --user pylux-latest.flatpak}"
-            echo "  flatpak run io.github.ForWard_Technologies_LLC.Pylux"
+            echo "  ${FP_INSTALL}"
             echo '  ```'
-            echo "  To update: run the same \`flatpak install\` line again when a new bundle is published (no \`flatpak update\` until Flathub listing)."
+            echo "  Run:"
+            echo '  ```bash'
+            echo "  ${FP_RUN}"
+            echo '  ```'
+            echo "  To update: run the install command again when a new bundle is published (no \`flatpak update\` until Flathub listing)."
             echo ""
 
             echo "### Flatpak (Flathub)"
