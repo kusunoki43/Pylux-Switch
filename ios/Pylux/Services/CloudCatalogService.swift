@@ -14,7 +14,7 @@ final class CloudCatalogService {
 
     private static let cacheDuration: TimeInterval = 86400 // 24 hours
     private static let psnowCacheFile = "psnow_catalog.json"
-    private static let ps5PublicCacheFile = "ps5_cloud_catalog.json"
+    private static let ps5PublicCacheFile = "ps5_cloud_catalog_v3.json"
     private static let pscloudCacheFile = "pscloud_catalog.json"
     private static let pscloudOwnedCacheFile = "pscloud_owned.json"
 
@@ -62,12 +62,18 @@ final class CloudCatalogService {
         os_log(.info, log: catalogLog, "Cached %d games to: %{public}s", games.count, filename)
     }
 
+    private struct Ps5CloudCatalogResult {
+        let browseGames: [CloudGame]
+        let plusLibrarySupplement: [CloudGame]
+    }
+
     private func serializeGame(_ g: CloudGame) -> [String: Any] {
         return [
             "productId": g.id, "name": g.name,
             "imageUrl": g.imageUrl, "landscapeImageUrl": g.landscapeImageUrl,
             "platform": g.platform, "serviceType": g.serviceType,
-            "conceptUrl": g.conceptUrl, "isOwned": g.isOwned,
+            "conceptUrl": g.conceptUrl, "conceptId": g.conceptId,
+            "isOwned": g.isOwned,
             "entitlementId": g.entitlementId, "storeProductId": g.storeProductId
         ]
     }
@@ -82,6 +88,7 @@ final class CloudCatalogService {
             platform: d["platform"] as? String ?? "ps4",
             serviceType: d["serviceType"] as? String ?? "psnow",
             conceptUrl: d["conceptUrl"] as? String ?? "",
+            conceptId: d["conceptId"] as? String ?? "",
             isOwned: d["isOwned"] as? Bool ?? false,
             entitlementId: d["entitlementId"] as? String ?? "",
             storeProductId: d["storeProductId"] as? String ?? ""
@@ -90,78 +97,201 @@ final class CloudCatalogService {
 
     // MARK: - PS5 Cloud Catalog (Public)
 
-    /// Fetch PS5 Cloud catalog (public list of streamable PS5 games)
-    /// Mirrors CloudCatalogBackend::fetchPs5CloudCatalog — cache key ps5_cloud_catalog
-    func fetchPs5CloudCatalog(locale: String = "en-us", forceRefresh: Bool = false) -> [CloudGame] {
-        if !forceRefresh, let cached = loadCachedGames(Self.ps5PublicCacheFile) {
+    func fetchPs5CloudCatalog(forceRefresh: Bool = false) -> [CloudGame] {
+        loadPs5CloudCatalog(forceRefresh: forceRefresh).browseGames
+    }
+
+    private func loadPs5CloudCatalog(forceRefresh: Bool) -> Ps5CloudCatalogResult {
+        let locale = CloudLocaleSettings.imagicLocale
+        os_log(.info, log: catalogLog,
+               "PS5 catalog stored=%{public}s imagic=%{public}s forceRefresh=%{public}s",
+               CloudLocaleSettings.stored, locale, forceRefresh ? "yes" : "no")
+        if !forceRefresh, let cached = loadCachedPs5CatalogV3() {
+            os_log(.info, log: catalogLog, "PS5 catalog: using disk cache (locale not re-fetched)")
             return cached
         }
 
-        guard let games = fetchPs5CloudCatalogFromNetwork(locale: locale) else { return [] }
-        if !games.isEmpty { cacheGames(games, filename: Self.ps5PublicCacheFile) }
-        return games
+        guard let fetched = fetchPs5CloudCatalogFromNetwork(locale: locale) else {
+            return Ps5CloudCatalogResult(browseGames: [], plusLibrarySupplement: [])
+        }
+        if !fetched.browseGames.isEmpty || !fetched.plusLibrarySupplement.isEmpty {
+            cachePs5CatalogV3(fetched)
+        }
+        return fetched
     }
 
-    private func fetchPs5CloudCatalogFromNetwork(locale: String) -> [CloudGame]? {
-        os_log(.info, log: catalogLog, "=== Fetching PS5 Cloud Catalog ===")
-        let url = "https://www.playstation.com/bin/imagic/gameslist?locale=\(locale)&categoryList=all-ps5-list"
+    private func loadCachedPs5CatalogV3() -> Ps5CloudCatalogResult? {
+        let file = Self.cacheDir.appendingPathComponent(Self.ps5PublicCacheFile)
+        guard FileManager.default.fileExists(atPath: file.path) else { return nil }
 
-        guard let response = CloudHttpClient.get(url: url, headers: [
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        ]), response.statusCode == 200,
-              let data = response.body.data(using: .utf8),
-              let categories = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-            os_log(.error, log: catalogLog, "PS5 catalog fetch failed")
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: file.path),
+              let modified = attrs[.modificationDate] as? Date else { return nil }
+        if Date().timeIntervalSince(modified) > Self.cacheDuration {
+            try? FileManager.default.removeItem(at: file)
             return nil
         }
 
-        var games: [CloudGame] = []
-        for category in categories {
-            guard let gameArray = category["games"] as? [[String: Any]] else { continue }
-            for gameObj in gameArray {
-                guard (gameObj["streamingSupported"] as? Bool) == true else { continue }
-                let productId = gameObj["productId"] as? String ?? ""
-                let name = gameObj["name"] as? String ?? "Unknown"
-                var imageUrl = gameObj["imageUrl"] as? String ?? ""
-                let conceptUrl = gameObj["conceptUrl"] as? String
-                    ?? gameObj["concept_url"] as? String
-                    ?? gameObj["url"] as? String ?? ""
+        guard let data = try? Data(contentsOf: file),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            try? FileManager.default.removeItem(at: file)
+            return nil
+        }
 
-                if imageUrl.hasPrefix("http://") { imageUrl = imageUrl.replacingOccurrences(of: "http://", with: "https://") }
+        let browseArr = root["games"] as? [[String: Any]] ?? []
+        let supplementArr = root["plusLibrarySupplement"] as? [[String: Any]] ?? []
+        let browse = browseArr.compactMap { deserializeGame($0) }
+        let supplement = supplementArr.compactMap { deserializeGame($0) }
+        os_log(.info, log: catalogLog, "Loaded PS5 catalog v3: %d browse, %d supplement", browse.count, supplement.count)
+        return Ps5CloudCatalogResult(browseGames: browse, plusLibrarySupplement: supplement)
+    }
 
-                guard !productId.isEmpty else { continue }
-                games.append(CloudGame(
-                    productId: productId, name: name,
-                    imageUrl: imageUrl, landscapeImageUrl: imageUrl,
-                    platform: "ps5", serviceType: "pscloud",
-                    conceptUrl: conceptUrl, isOwned: false
-                ))
+    private func cachePs5CatalogV3(_ catalog: Ps5CloudCatalogResult) {
+        let root: [String: Any] = [
+            "games": catalog.browseGames.map { serializeGame($0) },
+            "plusLibrarySupplement": catalog.plusLibrarySupplement.map { serializeGame($0) },
+            "total": catalog.browseGames.count
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: root, options: []) else { return }
+        let file = Self.cacheDir.appendingPathComponent(Self.ps5PublicCacheFile)
+        try? data.write(to: file, options: .atomic)
+        os_log(.info, log: catalogLog, "Cached PS5 catalog v3: %d browse, %d supplement",
+               catalog.browseGames.count, catalog.plusLibrarySupplement.count)
+    }
+
+    private static let ps5ImagicCategoryLists = [
+        "plus-games-list",
+        "ubisoft-classics-list",
+        "plus-classics-list",
+        "plus-monthly-games-list",
+        "free-to-play-list",
+        "all-ps5-list",
+    ]
+
+    private func fetchPs5CloudCatalogFromNetwork(locale: String) -> Ps5CloudCatalogResult? {
+        os_log(.info, log: catalogLog,
+               "=== Fetching PS5 Cloud Catalog (6 imagic lists) locale=%{public}s ===", locale)
+
+        var byConceptId: [String: [String: Any]] = [:]
+        var order: [String] = []
+        var plusSupplementByProductId: [String: [String: Any]] = [:]
+        var totalRows = 0
+
+        let headers = [
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        ]
+
+        for categoryList in Self.ps5ImagicCategoryLists {
+            let url = "https://www.playstation.com/bin/imagic/gameslist?locale=\(locale)&categoryList=\(categoryList)"
+            guard let response = CloudHttpClient.get(url: url, headers: headers),
+                  response.statusCode == 200,
+                  let data = response.body.data(using: .utf8),
+                  let categories = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                os_log(.error, log: catalogLog, "PS5 imagic list fetch failed: %{public}s", categoryList)
+                return nil
+            }
+
+            for category in categories {
+                guard let gameArray = category["games"] as? [[String: Any]] else { continue }
+                totalRows += gameArray.count
+                for gameObj in gameArray {
+                    guard isPs5Game(gameObj) else { continue }
+
+                    if categoryList == "plus-games-list",
+                       (gameObj["streamingSupported"] as? Bool) != true {
+                        let productId = gameObj["productId"] as? String ?? ""
+                        if !productId.isEmpty, plusSupplementByProductId[productId] == nil {
+                            plusSupplementByProductId[productId] = gameObj
+                        }
+                        continue
+                    }
+
+                    guard isPs5StreamingGame(gameObj) else { continue }
+                    let key = conceptKey(for: gameObj)
+                    guard !key.isEmpty, byConceptId[key] == nil else { continue }
+                    byConceptId[key] = gameObj
+                    order.append(key)
+                }
             }
         }
 
-        os_log(.info, log: catalogLog, "PS5 Cloud catalog: %d streaming games", games.count)
-        return games
+        var browseGames: [CloudGame] = []
+        for key in order {
+            guard let gameObj = byConceptId[key],
+                  let cloudGame = cloudGameFromImagic(gameObj) else { continue }
+            browseGames.append(cloudGame)
+        }
+
+        let plusLibrarySupplement = plusSupplementByProductId.values.compactMap { cloudGameFromImagic($0) }
+
+        os_log(.info, log: catalogLog,
+               "PS5 Cloud catalog: %d rows scanned, %d streaming, %d supplement",
+               totalRows, browseGames.count, plusLibrarySupplement.count)
+        return Ps5CloudCatalogResult(browseGames: browseGames, plusLibrarySupplement: plusLibrarySupplement)
+    }
+
+    private func isPs5Game(_ gameObj: [String: Any]) -> Bool {
+        guard let devices = gameObj["device"] as? [String] else { return false }
+        return devices.contains("PS5")
+    }
+
+    private func isPs5StreamingGame(_ gameObj: [String: Any]) -> Bool {
+        guard (gameObj["streamingSupported"] as? Bool) == true else { return false }
+        guard let devices = gameObj["device"] as? [String] else { return false }
+        return devices.contains("PS5")
+    }
+
+    private func conceptKey(for gameObj: [String: Any]) -> String {
+        if let conceptId = gameObj["conceptId"] as? Int { return String(conceptId) }
+        if let conceptId = gameObj["conceptId"] as? Double { return String(Int(conceptId)) }
+        if let conceptId = gameObj["conceptId"] as? String, !conceptId.isEmpty { return conceptId }
+        return gameObj["productId"] as? String ?? ""
+    }
+
+    private func cloudGameFromImagic(_ gameObj: [String: Any]) -> CloudGame? {
+        let productId = gameObj["productId"] as? String ?? ""
+        guard !productId.isEmpty else { return nil }
+        let name = gameObj["name"] as? String ?? "Unknown"
+        var imageUrl = gameObj["imageUrl"] as? String ?? ""
+        let conceptUrl = gameObj["conceptUrl"] as? String
+            ?? gameObj["concept_url"] as? String
+            ?? gameObj["url"] as? String ?? ""
+        if imageUrl.hasPrefix("http://") {
+            imageUrl = imageUrl.replacingOccurrences(of: "http://", with: "https://")
+        }
+        return CloudGame(
+            productId: productId, name: name,
+            imageUrl: imageUrl, landscapeImageUrl: imageUrl,
+            platform: "ps5", serviceType: "pscloud",
+            conceptUrl: conceptUrl, conceptId: conceptKey(for: gameObj),
+            isOwned: false
+        )
     }
 
     // MARK: - PS5 Cloud Library: All Games (matches Android fetchPs5CloudCatalog with ownership)
 
     /// Fetch ALL PS5 Cloud games with ownership flags.
     /// Mirrors Qt: fetchPs5CloudCatalog + getOwnedPs5CloudGames + CloudPlayView All tab
-    func fetchAllPs5CloudGames(npssoToken: String, locale: String = "en-us", forceRefresh: Bool = false) -> [CloudGame] {
+    func fetchAllPs5CloudGames(npssoToken: String, forceRefresh: Bool = false) -> [CloudGame] {
+        CloudLocaleSettings.ensureConfigured(npssoToken: npssoToken)
+
         if !forceRefresh, let cached = loadCachedGames(Self.pscloudCacheFile) {
             return cached
         }
 
         os_log(.info, log: catalogLog, "=== Fetching ALL PS5 Cloud Games (with ownership) ===")
 
-        let publicCatalog = fetchPs5CloudCatalog(locale: locale, forceRefresh: forceRefresh)
-        guard !publicCatalog.isEmpty else { return [] }
+        let catalog = loadPs5CloudCatalog(forceRefresh: forceRefresh)
+        guard !catalog.browseGames.isEmpty || !catalog.plusLibrarySupplement.isEmpty else { return [] }
 
-        let ownedCrossRef = getOwnedPs5CloudGames(npssoToken: npssoToken, publicCatalog: publicCatalog)
-        let allGames = PsCloudOwnership.markAllTabOwnership(
-            publicCatalog: publicCatalog,
+        let ownedCrossRef = getOwnedPs5CloudGames(
+            npssoToken: npssoToken,
+            publicCatalog: catalog.browseGames,
+            plusLibrarySupplement: catalog.plusLibrarySupplement
+        )
+        let allGames = PsCloudOwnership.mergeOwnedIntoBrowseCatalog(
+            browseCatalog: catalog.browseGames,
             ownedCrossRef: ownedCrossRef
         )
 
@@ -175,15 +305,21 @@ final class CloudCatalogService {
     // MARK: - PS5 Cloud Library: Owned Only
 
     /// Mirrors CloudCatalogBackend::getOwnedPs5CloudGames (owned tab)
-    func fetchOwnedPs5Games(npssoToken: String, locale: String = "en-us", forceRefresh: Bool = false) -> [CloudGame] {
+    func fetchOwnedPs5Games(npssoToken: String, forceRefresh: Bool = false) -> [CloudGame] {
+        CloudLocaleSettings.ensureConfigured(npssoToken: npssoToken)
+
         if !forceRefresh, let cached = loadCachedGames(Self.pscloudOwnedCacheFile) {
             return cached
         }
         guard !npssoToken.isEmpty else { return [] }
         os_log(.info, log: catalogLog, "=== Fetching Owned PS5 Games Only ===")
 
-        let publicCatalog = fetchPs5CloudCatalog(locale: locale, forceRefresh: forceRefresh)
-        let owned = getOwnedPs5CloudGames(npssoToken: npssoToken, publicCatalog: publicCatalog)
+        let catalog = loadPs5CloudCatalog(forceRefresh: forceRefresh)
+        let owned = getOwnedPs5CloudGames(
+            npssoToken: npssoToken,
+            publicCatalog: catalog.browseGames,
+            plusLibrarySupplement: catalog.plusLibrarySupplement
+        )
 
         os_log(.info, log: catalogLog, "Owned streaming games: %d", owned.count)
         if !owned.isEmpty { cacheGames(owned, filename: Self.pscloudOwnedCacheFile) }
@@ -191,7 +327,11 @@ final class CloudCatalogService {
     }
 
     /// Mirrors CloudCatalogBackend::getOwnedPs5CloudGames orchestration (network path).
-    private func getOwnedPs5CloudGames(npssoToken: String, publicCatalog: [CloudGame]) -> [CloudGame] {
+    private func getOwnedPs5CloudGames(
+        npssoToken: String,
+        publicCatalog: [CloudGame],
+        plusLibrarySupplement: [CloudGame] = []
+    ) -> [CloudGame] {
         guard !npssoToken.isEmpty,
               let oauthToken = fetchOwnedGamesOAuthToken(npssoToken: npssoToken) else {
             return []
@@ -204,7 +344,8 @@ final class CloudCatalogService {
 
         return PsCloudOwnership.crossReferenceOwnedGames(
             filteredEntitlements: filtered,
-            publicCatalog: publicCatalog
+            publicCatalog: publicCatalog,
+            plusLibrarySupplement: plusLibrarySupplement
         )
     }
 
@@ -331,6 +472,7 @@ final class CloudCatalogService {
             "Accept": "*/*"
         ]), response.statusCode == 200 else { return nil }
 
+        CloudLocaleSettings.applyLocaleFromKamajiSessionBody(response.body)
         return CloudHttpClient.extractCookie(from: response, name: "JSESSIONID")
     }
 

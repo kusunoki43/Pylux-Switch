@@ -753,7 +753,9 @@ final class PSGaikaiStreaming {
         // Common fields
         spec["entitlementId"] = entitlementId
         spec["npEnv"] = "np"
-        spec["language"] = "en-US"
+        let cloudLanguage = CloudLocaleSettings.stored
+        spec["language"] = cloudLanguage
+        os_log(.info, log: gkLog, "Gaikai request language: %{public}s", cloudLanguage)
         spec["cloudEndpoint"] = "https://cc.prod.gaikai.com"
         spec["redirectUri"] = redirectUri
 

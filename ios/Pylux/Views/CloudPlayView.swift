@@ -33,6 +33,7 @@ final class CloudPlayViewModel: ObservableObject {
 
     @Published var games: [CloudGame] = []
     @Published var loading = false
+    @Published var refreshing = false
     @Published var error: String?
     @Published var currentSection: Section = .library
     @Published var searchQuery = ""
@@ -134,14 +135,22 @@ final class CloudPlayViewModel: ObservableObject {
     }
 
     func refreshGames(npssoToken: String) {
+        guard !refreshing else { return }
+        refreshing = true
         loading = true
         error = nil
         let section = currentSection
         let ownedOnly = showOwnedOnly
 
         Task.detached(priority: .userInitiated) { [weak self] in
-            guard let self = self else { return }
             let loadedGames: [CloudGame]
+            defer {
+                Task { @MainActor in
+                    self?.loading = false
+                    self?.refreshing = false
+                }
+            }
+            guard let self = self else { return }
 
             switch section {
             case .catalog:
@@ -156,7 +165,11 @@ final class CloudPlayViewModel: ObservableObject {
 
             await MainActor.run {
                 self.games = loadedGames
-                self.loading = false
+                if loadedGames.isEmpty {
+                    self.error = section == .library
+                        ? "No cloud games found. Check your connection."
+                        : "Failed to load catalog. Check your connection."
+                }
             }
         }
     }
@@ -457,11 +470,20 @@ struct CloudPlayView: View {
                 Button {
                     viewModel.refreshGames(npssoToken: npssoToken)
                 } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 12))
-                        .foregroundColor(.white.opacity(0.45))
-                        .frame(width: 28, height: 28)
+                    Group {
+                        if viewModel.refreshing {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white.opacity(0.7)))
+                                .scaleEffect(0.65)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 12))
+                                .foregroundColor(.white.opacity(0.45))
+                        }
+                    }
+                    .frame(width: 28, height: 28)
                 }
+                .disabled(viewModel.refreshing)
             }
         }
         .padding(.horizontal, 10)

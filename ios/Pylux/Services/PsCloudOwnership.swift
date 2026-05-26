@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: LicenseRef-AGPL-3.0-only-OpenSSL
-// PS5 cloud ownership matching — mirrors gui/src/cloudcatalogbackend.cpp
 
 import Foundation
 
@@ -16,7 +15,11 @@ enum PsCloudOwnership {
     static let pageSize = 300
     static let pageCooldownSeconds: TimeInterval = 0.1
 
-    /// Mirrors CloudCatalogBackend::filterOwnedPs5Games
+    private struct CatalogIndex {
+        var byProductId: [String: Int] = [:]
+        var byConceptId: [String: Int] = [:]
+    }
+
     static func filterOwnedPs5Games(_ entitlements: [PsCloudEntitlement]) -> [PsCloudEntitlement] {
         entitlements.filter { ent in
             guard ent.packageType == "PSGD" else { return false }
@@ -27,28 +30,35 @@ enum PsCloudOwnership {
         }
     }
 
-    /// Mirrors CloudCatalogBackend::processCrossReferenceComplete
     static func crossReferenceOwnedGames(
         filteredEntitlements: [PsCloudEntitlement],
-        publicCatalog: [CloudGame]
+        publicCatalog: [CloudGame],
+        plusLibrarySupplement: [CloudGame] = []
     ) -> [CloudGame] {
         var catalogMap: [String: CloudGame] = [:]
         for game in publicCatalog {
             catalogMap[game.id] = game
         }
+        var supplementMap: [String: CloudGame] = [:]
+        for game in plusLibrarySupplement {
+            supplementMap[game.id] = game
+        }
 
         var ownedGames: [CloudGame] = []
         for ent in filteredEntitlements {
-            let catalogGame: CloudGame?
+            let meta: CloudGame?
             if !ent.productId.isEmpty, let g = catalogMap[ent.productId] {
-                catalogGame = g
+                meta = g
             } else if !ent.id.isEmpty, let g = catalogMap[ent.id] {
-                catalogGame = g
+                meta = g
+            } else if !ent.productId.isEmpty, ent.id == ent.productId,
+                      let g = supplementMap[ent.productId] {
+                meta = g
             } else {
-                catalogGame = nil
+                meta = nil
             }
 
-            guard var game = catalogGame else { continue }
+            guard var game = meta else { continue }
 
             game.isOwned = true
             game.entitlementId = ent.id
@@ -59,25 +69,33 @@ enum PsCloudOwnership {
         return ownedGames
     }
 
-    /// Mirrors CloudPlayView.qml All tab — ownedIds from cross-ref product_id || catalog productId
-    static func markAllTabOwnership(publicCatalog: [CloudGame], ownedCrossRef: [CloudGame]) -> [CloudGame] {
-        var ownedIds = Set<String>()
-        for game in ownedCrossRef {
-            if !game.storeProductId.isEmpty { ownedIds.insert(game.storeProductId) }
-            if !game.id.isEmpty { ownedIds.insert(game.id) }
+    static func mergeOwnedIntoBrowseCatalog(
+        browseCatalog: [CloudGame],
+        ownedCrossRef: [CloudGame]
+    ) -> [CloudGame] {
+        var games = browseCatalog
+        var catalogIndex = buildCatalogIndex(games)
+
+        for owned in ownedCrossRef {
+            let catalogMatch = findCatalogIndexForOwned(owned, catalogIndex: catalogIndex)
+            if catalogMatch >= 0 {
+                var existing = games[catalogMatch]
+                existing.isOwned = true
+                if !owned.entitlementId.isEmpty { existing.entitlementId = owned.entitlementId }
+                if !owned.storeProductId.isEmpty { existing.storeProductId = owned.storeProductId }
+                games[catalogMatch] = existing
+                continue
+            }
+
+            var entry = owned
+            entry.isOwned = true
+            registerInCatalogIndex(entry, index: games.count, catalogIndex: &catalogIndex)
+            games.append(entry)
         }
 
-        let ownedByCatalogId = Dictionary(ownedCrossRef.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-
-        return publicCatalog.map { cat in
-            var game = cat
-            let isOwned = ownedIds.contains(cat.id)
-            game.isOwned = isOwned
-            if isOwned, let matched = ownedByCatalogId[cat.id] {
-                game.entitlementId = matched.entitlementId
-                game.storeProductId = matched.storeProductId
-            }
-            return game
+        return games.sorted {
+            if $0.isOwned != $1.isOwned { return $0.isOwned && !$1.isOwned }
+            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
     }
 
@@ -92,5 +110,33 @@ enum PsCloudOwnership {
             packageType: (gameMeta["package_type"] as? String) ?? "",
             name: name
         )
+    }
+
+    private static func buildCatalogIndex(_ games: [CloudGame]) -> CatalogIndex {
+        var catalogIndex = CatalogIndex()
+        for i in games.indices {
+            registerInCatalogIndex(games[i], index: i, catalogIndex: &catalogIndex)
+        }
+        return catalogIndex
+    }
+
+    private static func registerInCatalogIndex(
+        _ game: CloudGame,
+        index: Int,
+        catalogIndex: inout CatalogIndex
+    ) {
+        if !game.id.isEmpty { catalogIndex.byProductId[game.id] = index }
+        if !game.conceptId.isEmpty { catalogIndex.byConceptId[game.conceptId] = index }
+        if !game.entitlementId.isEmpty, game.entitlementId != game.id {
+            catalogIndex.byProductId[game.entitlementId] = index
+        }
+    }
+
+    private static func findCatalogIndexForOwned(_ owned: CloudGame, catalogIndex: CatalogIndex) -> Int {
+        if !owned.id.isEmpty, let idx = catalogIndex.byProductId[owned.id] { return idx }
+        if !owned.entitlementId.isEmpty, let idx = catalogIndex.byProductId[owned.entitlementId] { return idx }
+        if !owned.storeProductId.isEmpty, let idx = catalogIndex.byProductId[owned.storeProductId] { return idx }
+        if !owned.conceptId.isEmpty, let idx = catalogIndex.byConceptId[owned.conceptId] { return idx }
+        return -1
     }
 }

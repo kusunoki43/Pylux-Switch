@@ -5,9 +5,6 @@ package com.metallic.chiaki.cloudplay.api
 import com.metallic.chiaki.cloudplay.model.CloudGame
 import org.json.JSONObject
 
-/**
- * PS5 cloud ownership matching — mirrors gui/src/cloudcatalogbackend.cpp
- */
 object PsCloudOwnership
 {
 	const val PAGE_SIZE = 300
@@ -21,7 +18,11 @@ object PsCloudOwnership
 		val name: String
 	)
 
-	/** Mirrors CloudCatalogBackend::filterOwnedPs5Games */
+	private data class CatalogIndex(
+		val byProductId: MutableMap<String, Int>,
+		val byConceptId: MutableMap<String, Int>
+	)
+
 	fun filterOwnedPs5Games(entitlements: List<Entitlement>): List<Entitlement>
 	{
 		return entitlements.filter { ent ->
@@ -47,27 +48,33 @@ object PsCloudOwnership
 		)
 	}
 
-	/** Mirrors CloudCatalogBackend::processCrossReferenceComplete */
 	fun crossReferenceOwnedGames(
 		filteredEntitlements: List<Entitlement>,
-		publicCatalog: List<CloudGame>
+		publicCatalog: List<CloudGame>,
+		plusLibrarySupplement: List<CloudGame> = emptyList()
 	): List<CloudGame>
 	{
 		val catalogMap = publicCatalog.associateBy { it.productId }
+		val supplementMap = plusLibrarySupplement.associateBy { it.productId }
 		val ownedGames = mutableListOf<CloudGame>()
 
 		for (ent in filteredEntitlements)
 		{
-			val catalogGame = when {
+			val meta = when {
 				ent.productId.isNotEmpty() && catalogMap.containsKey(ent.productId) ->
 					catalogMap[ent.productId]
 				ent.id.isNotEmpty() && catalogMap.containsKey(ent.id) ->
 					catalogMap[ent.id]
+				ent.productId.isNotEmpty() && ent.id == ent.productId
+					&& supplementMap.containsKey(ent.productId) ->
+					supplementMap[ent.productId]
 				else -> null
 			} ?: continue
 
+			val displayName = meta.name.ifEmpty { ent.name }
 			ownedGames.add(
-				catalogGame.copy(
+				meta.copy(
+					name = displayName,
 					isOwned = true,
 					entitlementId = ent.id,
 					storeProductId = ent.productId
@@ -78,34 +85,37 @@ object PsCloudOwnership
 		return ownedGames
 	}
 
-	/** Mirrors CloudPlayView.qml All tab ownership marking */
-	fun markAllTabOwnership(publicCatalog: List<CloudGame>, ownedCrossRef: List<CloudGame>): List<CloudGame>
+	fun mergeOwnedIntoBrowseCatalog(
+		browseCatalog: List<CloudGame>,
+		ownedCrossRef: List<CloudGame>
+	): List<CloudGame>
 	{
-		val ownedIds = mutableSetOf<String>()
-		for (game in ownedCrossRef)
+		val games = browseCatalog.toMutableList()
+		val catalogIndex = buildCatalogIndex(games)
+
+		for (owned in ownedCrossRef)
 		{
-			if (game.storeProductId.isNotEmpty()) ownedIds.add(game.storeProductId)
-			if (game.productId.isNotEmpty()) ownedIds.add(game.productId)
-		}
-
-		val ownedByCatalogId = ownedCrossRef.associateBy { it.productId }
-
-		return publicCatalog.map { cat ->
-			val isOwned = ownedIds.contains(cat.productId)
-			if (!isOwned)
+			val catalogMatch = findCatalogIndexForOwned(owned, catalogIndex)
+			if (catalogMatch >= 0)
 			{
-				cat.copy(isOwned = false)
-			}
-			else
-			{
-				val matched = ownedByCatalogId[cat.productId]
-				cat.copy(
+				val existing = games[catalogMatch]
+				games[catalogMatch] = existing.copy(
 					isOwned = true,
-					entitlementId = matched?.entitlementId ?: "",
-					storeProductId = matched?.storeProductId ?: ""
+					entitlementId = owned.entitlementId.ifEmpty { existing.entitlementId },
+					storeProductId = owned.storeProductId.ifEmpty { existing.storeProductId }
 				)
+				continue
 			}
+
+			val entry = owned.copy(isOwned = true)
+			registerInCatalogIndex(entry, games.size, catalogIndex)
+			games.add(entry)
 		}
+
+		return games.sortedWith(
+			compareByDescending<CloudGame> { it.isOwned }
+				.thenBy { it.name.lowercase() }
+		)
 	}
 
 	fun streamingIdentifier(game: CloudGame): String
@@ -116,5 +126,37 @@ object PsCloudOwnership
 			if (game.storeProductId.isNotEmpty()) return game.storeProductId
 		}
 		return game.productId
+	}
+
+	private fun buildCatalogIndex(games: List<CloudGame>): CatalogIndex
+	{
+		val byProductId = mutableMapOf<String, Int>()
+		val byConceptId = mutableMapOf<String, Int>()
+		for (i in games.indices)
+			registerInCatalogIndex(games[i], i, CatalogIndex(byProductId, byConceptId))
+		return CatalogIndex(byProductId, byConceptId)
+	}
+
+	private fun registerInCatalogIndex(game: CloudGame, index: Int, catalogIndex: CatalogIndex)
+	{
+		if (game.productId.isNotEmpty())
+			catalogIndex.byProductId[game.productId] = index
+		if (game.conceptId.isNotEmpty())
+			catalogIndex.byConceptId[game.conceptId] = index
+		if (game.entitlementId.isNotEmpty() && game.entitlementId != game.productId)
+			catalogIndex.byProductId[game.entitlementId] = index
+	}
+
+	private fun findCatalogIndexForOwned(owned: CloudGame, catalogIndex: CatalogIndex): Int
+	{
+		if (owned.productId.isNotEmpty() && catalogIndex.byProductId.containsKey(owned.productId))
+			return catalogIndex.byProductId.getValue(owned.productId)
+		if (owned.entitlementId.isNotEmpty() && catalogIndex.byProductId.containsKey(owned.entitlementId))
+			return catalogIndex.byProductId.getValue(owned.entitlementId)
+		if (owned.storeProductId.isNotEmpty() && catalogIndex.byProductId.containsKey(owned.storeProductId))
+			return catalogIndex.byProductId.getValue(owned.storeProductId)
+		if (owned.conceptId.isNotEmpty() && catalogIndex.byConceptId.containsKey(owned.conceptId))
+			return catalogIndex.byConceptId.getValue(owned.conceptId)
+		return -1
 	}
 }

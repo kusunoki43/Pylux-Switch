@@ -5,17 +5,19 @@ package com.metallic.chiaki.cloudplay.api
 import android.util.Log
 import com.metallic.chiaki.cloudplay.PsnApiConstants
 import com.metallic.chiaki.cloudplay.model.CloudGame
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import org.json.JSONArray
 import org.json.JSONObject
 
+data class Ps5CloudCatalogResult(
+	val browseGames: List<CloudGame>,
+	val plusLibrarySupplement: List<CloudGame>
+)
+
 /**
- * PsCloudCatalogService - Handles PS5 Cloud Gaming catalog fetching
- * 
- * This service fetches PS5 cloud gaming catalogs:
- * - Public catalog of all streamable PS5 games
- * - User's owned PS5 games library
- * 
- * Mirrors: gui/src/cloudcatalogbackend.cpp (PS5 catalog functions)
+ * PsCloudCatalogService - PS5 cloud catalog fetching (imagic gameslist).
  */
 class PsCloudCatalogService
 {
@@ -23,22 +25,48 @@ class PsCloudCatalogService
 	{
 		private const val TAG = "PsCloudCatalogService"
 		private const val ACCOUNT_BASE = "https://ca.account.sony.com/api"
+		private const val IMAGIC_GAMESLIST_BASE =
+			"https://www.playstation.com/bin/imagic/gameslist"
+
+		private val IMAGIC_PS5_CLOUD_CATEGORY_LISTS = listOf(
+			"plus-games-list",
+			"ubisoft-classics-list",
+			"plus-classics-list",
+			"plus-monthly-games-list",
+			"free-to-play-list",
+			"all-ps5-list",
+		)
 	}
 	
-	/**
-	 * Fetch PS5 Game Catalog (public list of all streamable PS5 games)
-	 * Mirrors: CloudCatalogBackend::fetchPs5CloudCatalog() (Qt lines 844-973)
-	 * 
-	 * @param locale Language locale (e.g., "en-us", "ja-jp")
-	 * @return List of CloudGame objects
-	 */
-	suspend fun fetchPs5CloudCatalog(locale: String): List<CloudGame>
-	{
-		Log.i(TAG, "=== Fetching PS5 Game Catalog ===")
+	suspend fun fetchPs5CloudCatalog(locale: String): Ps5CloudCatalogResult = coroutineScope {
+		Log.i(TAG, "=== Fetching PS5 Game Catalog (6 imagic lists) ===")
 		Log.i(TAG, "  Locale: $locale")
-		
-		val url = "https://www.playstation.com/bin/imagic/gameslist?locale=$locale&categoryList=all-ps5-list"
-		
+
+		val byConceptId = LinkedHashMap<String, JSONObject>()
+		val plusSupplementByProductId = LinkedHashMap<String, JSONObject>()
+		var totalGames = 0
+
+		IMAGIC_PS5_CLOUD_CATEGORY_LISTS.map { categoryList ->
+			async { categoryList to fetchImagicCategoryList(locale, categoryList) }
+		}.awaitAll().forEach { (categoryList, jsonArray) ->
+			totalGames += mergeImagicCategoryIntoMap(
+				categoryList, jsonArray, byConceptId, plusSupplementByProductId
+			)
+		}
+
+		val browseGames = byConceptId.values.mapNotNull { jsonToCloudGame(it) }
+		val plusLibrarySupplement = plusSupplementByProductId.values.mapNotNull { jsonToCloudGame(it) }
+
+		Log.i(TAG, "  Imagic rows scanned: $totalGames")
+		Log.i(TAG, "  PS5 streaming games (deduped by conceptId): ${browseGames.size}")
+		Log.i(TAG, "  Plus library-stream supplement (stream=false): ${plusLibrarySupplement.size}")
+
+		Ps5CloudCatalogResult(browseGames, plusLibrarySupplement)
+	}
+
+	private suspend fun fetchImagicCategoryList(locale: String, categoryList: String): JSONArray
+	{
+		val url = "$IMAGIC_GAMESLIST_BASE?locale=$locale&categoryList=$categoryList"
 		val response = HttpClient.get(
 			url = url,
 			headers = mapOf(
@@ -47,150 +75,152 @@ class PsCloudCatalogService
 				"User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 			)
 		)
-		
+
 		if (response.statusCode != 200)
 		{
-			Log.e(TAG, "PS5 catalog fetch error: ${response.statusCode}")
-			Log.e(TAG, "Response: ${response.body}")
-			throw Exception("Failed to fetch PS5 catalog: HTTP ${response.statusCode}")
+			Log.e(TAG, "Imagic list '$categoryList' fetch error: ${response.statusCode}")
+			throw Exception("Failed to fetch imagic list $categoryList: HTTP ${response.statusCode}")
 		}
-		
-		val jsonArray = JSONArray(response.body)
-		Log.i(TAG, "  Received ${jsonArray.length()} categories")
-		
-		// Flatten all games from all categories and filter for streaming support (Qt lines 907-938)
-		val allGames = mutableListOf<CloudGame>()
-		var totalGames = 0
-		var streamingGames = 0
-		
+
+		return JSONArray(response.body)
+	}
+
+	private fun mergeImagicCategoryIntoMap(
+		categoryList: String,
+		jsonArray: JSONArray,
+		byConceptId: LinkedHashMap<String, JSONObject>,
+		plusSupplementByProductId: LinkedHashMap<String, JSONObject>,
+	): Int
+	{
+		var rows = 0
 		for (i in 0 until jsonArray.length())
 		{
-			val category = jsonArray.getJSONObject(i)
-			val games = category.optJSONArray("games") ?: continue
-			
-			totalGames += games.length()
-			
+			val games = jsonArray.getJSONObject(i).optJSONArray("games") ?: continue
+			rows += games.length()
 			for (j in 0 until games.length())
 			{
 				val gameObj = games.getJSONObject(j)
-				
-				// Filter for streamingSupported: true (Qt lines 923)
-				if (gameObj.optBoolean("streamingSupported", false))
+				if (!isPs5Game(gameObj))
+					continue
+
+				if (categoryList == "plus-games-list"
+					&& !gameObj.optBoolean("streamingSupported", false))
 				{
-				streamingGames++
-				
-				val productId = gameObj.optString("productId", "")
-				val gameName = gameObj.optString("name", "Unknown")  // PS5 catalog uses "name", not "title"
-				var imageUrl = gameObj.optString("imageUrl", "")
-				
-				// Extract conceptUrl (for adding game to library)
-				// Try multiple possible field names
-				var conceptUrl = gameObj.optString("conceptUrl", "")
-				if (conceptUrl.isEmpty())
-				{
-					conceptUrl = gameObj.optString("concept_url", "")
+					val productId = gameObj.optString("productId", "")
+					if (productId.isNotEmpty())
+						plusSupplementByProductId.putIfAbsent(productId, gameObj)
+					continue
 				}
-				if (conceptUrl.isEmpty())
-				{
-					conceptUrl = gameObj.optString("url", "")
-				}
-				if (conceptUrl.isEmpty())
-				{
-					conceptUrl = gameObj.optString("storeUrl", "")
-				}
-				if (conceptUrl.isEmpty())
-				{
-					conceptUrl = gameObj.optString("psStoreUrl", "")
-				}
-				if (conceptUrl.isEmpty())
-				{
-					conceptUrl = gameObj.optString("concept", "")
-				}
-				
-				// Check nested objects (e.g., links, concept object, etc.)
-				if (conceptUrl.isEmpty())
-				{
-					val links = gameObj.optJSONObject("links")
-					if (links != null)
-					{
-						conceptUrl = links.optString("conceptUrl", "")
-							?: links.optString("concept_url", "")
-							?: links.optString("url", "")
-					}
-				}
-				if (conceptUrl.isEmpty())
-				{
-					val concept = gameObj.optJSONObject("concept")
-					if (concept != null)
-					{
-						conceptUrl = concept.optString("url", "")
-							?: concept.optString("href", "")
-					}
-				}
-				
-				// Log available fields for debugging if conceptUrl is missing
-				if (conceptUrl.isEmpty() && productId.isNotEmpty())
-				{
-					val keys = gameObj.keys()
-					val keyList = mutableListOf<String>()
-					while (keys.hasNext())
-					{
-						keyList.add(keys.next())
-					}
-					Log.w(TAG, "Game '${gameName}' (${productId}) - conceptUrl missing. Available fields: ${keyList.joinToString(", ")}")
-					// Log all string fields that might contain URLs
-					keyList.forEach { key ->
-						val value = gameObj.optString(key, "")
-						if (value.isNotEmpty() && (value.startsWith("http://") || value.startsWith("https://")))
-						{
-							Log.d(TAG, "  Found URL field '$key': $value")
-						}
-					}
-				}
-				
-				// Extract both cover and landscape image URLs
-				val (coverUrl, landscapeUrl) = if (imageUrl.isNotEmpty()) {
-					// If imageUrl already set, use it for both (fallback)
-					Pair(imageUrl, imageUrl)
-				} else {
-					extractImageUrls(gameObj)
-				}
-				
-				// Convert HTTP to HTTPS for image URLs
-				var finalCoverUrl = coverUrl
-				var finalLandscapeUrl = landscapeUrl
-				if (finalCoverUrl.startsWith("http://"))
-				{
-					finalCoverUrl = finalCoverUrl.replace("http://", "https://")
-				}
-				if (finalLandscapeUrl.startsWith("http://"))
-				{
-					finalLandscapeUrl = finalLandscapeUrl.replace("http://", "https://")
-				}
-				
-				if (productId.isNotEmpty())
-				{
-					allGames.add(
-						CloudGame(
-							productId = productId,
-							name = gameName,
-							imageUrl = finalCoverUrl,
-							landscapeImageUrl = finalLandscapeUrl,
-							platform = "ps5",
-							serviceType = "pscloud",
-							conceptUrl = conceptUrl,
-							isOwned = false  // Will be set to true during cross-reference
-						)
-					)
-				}
-			}
+
+				if (!isPs5StreamingGame(gameObj))
+					continue
+				val key = conceptKey(gameObj)
+				if (key.isNotEmpty() && !byConceptId.containsKey(key))
+					byConceptId[key] = gameObj
 			}
 		}
-		
-		Log.i(TAG, "  Total games: $totalGames")
-		Log.i(TAG, "  Streaming-supported games: $streamingGames")
-		
-		return allGames
+		return rows
+	}
+
+	private fun isPs5Game(gameObj: JSONObject): Boolean
+	{
+		val devices = gameObj.optJSONArray("device") ?: return false
+		for (i in 0 until devices.length())
+		{
+			if (devices.optString(i) == "PS5")
+				return true
+		}
+		return false
+	}
+
+	private fun isPs5StreamingGame(gameObj: JSONObject): Boolean
+	{
+		if (!gameObj.optBoolean("streamingSupported", false))
+			return false
+		val devices = gameObj.optJSONArray("device") ?: return false
+		for (i in 0 until devices.length())
+		{
+			if (devices.optString(i) == "PS5")
+				return true
+		}
+		return false
+	}
+
+	private fun conceptKey(gameObj: JSONObject): String
+	{
+		if (gameObj.has("conceptId") && !gameObj.isNull("conceptId"))
+		{
+			when (val raw = gameObj.get("conceptId"))
+			{
+				is Number -> return raw.toLong().toString()
+				is String -> if (raw.isNotEmpty()) return raw
+			}
+		}
+		return gameObj.optString("productId", "")
+	}
+
+	private fun jsonToCloudGame(gameObj: JSONObject): CloudGame?
+	{
+		val productId = gameObj.optString("productId", "")
+		if (productId.isEmpty())
+			return null
+
+		val gameName = gameObj.optString("name", "Unknown")
+		var imageUrl = gameObj.optString("imageUrl", "")
+		var conceptUrl = gameObj.optString("conceptUrl", "")
+		if (conceptUrl.isEmpty())
+			conceptUrl = gameObj.optString("concept_url", "")
+		if (conceptUrl.isEmpty())
+			conceptUrl = gameObj.optString("url", "")
+		if (conceptUrl.isEmpty())
+			conceptUrl = gameObj.optString("storeUrl", "")
+		if (conceptUrl.isEmpty())
+			conceptUrl = gameObj.optString("psStoreUrl", "")
+		if (conceptUrl.isEmpty())
+			conceptUrl = gameObj.optString("concept", "")
+		if (conceptUrl.isEmpty())
+		{
+			val links = gameObj.optJSONObject("links")
+			if (links != null)
+			{
+				conceptUrl = links.optString("conceptUrl", "")
+					.ifEmpty { links.optString("concept_url", "") }
+					.ifEmpty { links.optString("url", "") }
+			}
+		}
+		if (conceptUrl.isEmpty())
+		{
+			val concept = gameObj.optJSONObject("concept")
+			if (concept != null)
+			{
+				conceptUrl = concept.optString("url", "")
+					.ifEmpty { concept.optString("href", "") }
+			}
+		}
+
+		val (coverUrl, landscapeUrl) = if (imageUrl.isNotEmpty())
+			Pair(imageUrl, imageUrl)
+		else
+			extractImageUrls(gameObj)
+
+		var finalCoverUrl = coverUrl
+		var finalLandscapeUrl = landscapeUrl
+		if (finalCoverUrl.startsWith("http://"))
+			finalCoverUrl = finalCoverUrl.replace("http://", "https://")
+		if (finalLandscapeUrl.startsWith("http://"))
+			finalLandscapeUrl = finalLandscapeUrl.replace("http://", "https://")
+
+		return CloudGame(
+			productId = productId,
+			name = gameName,
+			imageUrl = finalCoverUrl,
+			landscapeImageUrl = finalLandscapeUrl,
+			platform = "ps5",
+			serviceType = "pscloud",
+			conceptUrl = conceptUrl,
+			conceptId = conceptKey(gameObj),
+			isOwned = false
+		)
 	}
 	
 	/**
@@ -211,8 +241,12 @@ class PsCloudCatalogService
 		Log.i(TAG, "=== Fetching Owned PS5 Games ===")
 		Log.i(TAG, "  Locale: $locale")
 		
-		val publicCatalog = fetchPs5CloudCatalog(locale)
-		val ownedGames = getOwnedPs5CloudGames(npssoToken, publicCatalog)
+		val catalog = fetchPs5CloudCatalog(locale)
+		val ownedGames = getOwnedPs5CloudGames(
+			npssoToken,
+			catalog.browseGames,
+			catalog.plusLibrarySupplement
+		)
 		
 		Log.i(TAG, "  Owned streaming games: ${ownedGames.size}")
 		return ownedGames
@@ -221,7 +255,11 @@ class PsCloudCatalogService
 	/**
 	 * Mirrors CloudCatalogBackend::getOwnedPs5CloudGames cross-reference (network).
 	 */
-	suspend fun getOwnedPs5CloudGames(npssoToken: String, publicCatalog: List<CloudGame>): List<CloudGame>
+	suspend fun getOwnedPs5CloudGames(
+		npssoToken: String,
+		publicCatalog: List<CloudGame>,
+		plusLibrarySupplement: List<CloudGame> = emptyList()
+	): List<CloudGame>
 	{
 		if (npssoToken.isEmpty()) return emptyList()
 		
@@ -231,7 +269,9 @@ class PsCloudCatalogService
 		val rawEntitlements = fetchEntitlementsPaginated(oauthToken)
 		val filtered = PsCloudOwnership.filterOwnedPs5Games(rawEntitlements)
 		
-		return PsCloudOwnership.crossReferenceOwnedGames(filtered, publicCatalog)
+		return PsCloudOwnership.crossReferenceOwnedGames(
+			filtered, publicCatalog, plusLibrarySupplement
+		)
 	}
 	
 	/**

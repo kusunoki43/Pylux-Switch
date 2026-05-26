@@ -62,7 +62,8 @@ signals:
 
 private slots:
     void handlePsnowCategoryResponse();
-    void handlePs5CatalogResponse();
+    void handlePs5ImagicListResponse();
+    void finalizePs5CloudCatalogFetch();
     void handleOwnedGamesOAuthResponse();
     void fetchOwnedGamesPage();
     void handleOwnedGamesResponse();
@@ -94,9 +95,14 @@ private:
         bool authInProgress;
     } psnowState;
     
-    // PS5 catalog fetching state
+    // PS5 catalog fetching state (six imagic lists, merged like Sony's PS5 cloud finder)
     struct Ps5FetchState {
         QJSValue callback;
+        int pendingListFetches = 0;
+        bool fetchFailed = false;
+        QMap<QString, QJsonObject> gamesByConceptId;
+        QMap<QString, QJsonObject> plusLibrarySupplementByProductId;
+        int totalGamesSeen = 0;
     } ps5State;
     
     // Owned games fetching state
@@ -119,6 +125,7 @@ private:
     struct CrossReferenceState {
         QJSValue callback;
         QJsonArray cloudCatalogGames;
+        QJsonArray plusLibrarySupplement;
         QJsonArray ownedGames;
         bool catalogFetched;
         bool ownedGamesFetched;

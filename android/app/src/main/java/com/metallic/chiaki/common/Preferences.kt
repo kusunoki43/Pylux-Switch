@@ -7,10 +7,12 @@ import android.content.SharedPreferences
 import androidx.annotation.StringRes
 import androidx.preference.PreferenceManager
 import com.pylux.stream.R
+import com.metallic.chiaki.cloudplay.repository.CloudGameRepository
 import com.metallic.chiaki.lib.Codec
 import com.metallic.chiaki.lib.ConnectVideoProfile
 import com.metallic.chiaki.lib.VideoFPSPreset
 import com.metallic.chiaki.lib.VideoResolutionPreset
+import android.util.Log
 import io.reactivex.Observable
 import io.reactivex.subjects.BehaviorSubject
 import kotlin.math.max
@@ -54,6 +56,7 @@ class Preferences(context: Context)
 		const val CLOUD_BITRATE_DEFAULT_KBPS = 20000
 	}
 
+	private val appContext = context.applicationContext
 	private val sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context)
 	private val sharedPreferenceChangeListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
 		when(key)
@@ -235,8 +238,9 @@ class Preferences(context: Context)
 			.apply()
 	}
 
-	// Cloud language settings - UNIFIED for both PSNow and PSCloud (matching Qt GetCloudLanguagePSCloud)
-	// Qt uses ONE setting for both PSNow and PSCloud
+	fun isCloudLanguageConfigured(): Boolean =
+		sharedPreferences.contains("cloud_language_pscloud")
+
 	fun getCloudLanguage(): String
 	{
 		return sharedPreferences.getString("cloud_language_pscloud", "en-US") ?: "en-US"
@@ -244,7 +248,19 @@ class Preferences(context: Context)
 
 	fun setCloudLanguage(value: String)
 	{
+		val configured = isCloudLanguageConfigured()
+		val previous = getCloudLanguage()
+		if (configured && previous == value)
+			return
 		sharedPreferences.edit().putString("cloud_language_pscloud", value).apply()
+		Log.i("Preferences", "Cloud locale ${if (configured) "changed" else "configured"}: $previous -> $value")
+		CloudGameRepository.invalidateCatalogCache(appContext)
+	}
+
+	fun setCloudLanguageFromSession(language: String?, country: String?)
+	{
+		val locale = com.metallic.chiaki.cloudplay.CloudLocale.fromSession(language, country) ?: return
+		setCloudLanguage(locale)
 	}
 	
 	// Cloud resolution settings (matching Qt GetCloudResolutionPSNOW/SetCloudResolutionPSNOW)

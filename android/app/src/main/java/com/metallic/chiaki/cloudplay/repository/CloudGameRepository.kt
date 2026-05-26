@@ -4,6 +4,8 @@ package com.metallic.chiaki.cloudplay.repository
 
 import android.content.Context
 import android.util.Log
+import com.metallic.chiaki.cloudplay.CloudLocaleBootstrap
+import com.metallic.chiaki.cloudplay.api.Ps5CloudCatalogResult
 import com.metallic.chiaki.cloudplay.api.PsCloudOwnership
 import com.metallic.chiaki.cloudplay.api.PsnCatalogService
 import com.metallic.chiaki.cloudplay.api.PsCloudCatalogService
@@ -28,8 +30,26 @@ class CloudGameRepository(
 	{
 		private const val TAG = "CloudGameRepository"
 		private const val CACHE_DIR = "cloud_catalog_cache"
+
+		fun invalidateCatalogCache(context: Context)
+		{
+			try
+			{
+				val cacheDir = File(context.cacheDir, CACHE_DIR)
+				cacheDir.listFiles()?.forEach { file ->
+					if (file.isFile)
+						file.delete()
+				}
+				Log.i(TAG, "Catalog cache invalidated (locale change)")
+			}
+			catch (e: Exception)
+			{
+				Log.w(TAG, "Error invalidating catalog cache", e)
+			}
+		}
 		private const val PSNOW_CACHE_FILE = "psnow_catalog.json"
 		private const val PSCLOUD_CACHE_FILE = "pscloud_catalog.json"
+		private const val PS5_CATALOG_V3_CACHE_FILE = "ps5_cloud_catalog_v3.json"
 		private const val CACHE_DURATION_MS = 24 * 60 * 60 * 1000L // 24 hours
 	}
 	
@@ -80,6 +100,8 @@ class CloudGameRepository(
 	{
 		return withContext(Dispatchers.IO)
 		{
+			CloudLocaleBootstrap.ensureConfigured(preferences, npssoToken)
+
 			// Check cache first if not forcing refresh
 			if (!forceRefresh)
 			{
@@ -96,15 +118,19 @@ class CloudGameRepository(
 		Log.i(TAG, "Fetching fresh PS5 Cloud catalog from network")
 		try
 		{
-			// Get locale from unified language setting and convert to lowercase (Qt lines 847-848)
-			val localeSetting = preferences.getCloudLanguage()
-			val locale = localeSetting.lowercase() // Convert "en-US" to "en-us"
-			
-			val games = pscloudCatalogService.fetchPs5CloudCatalog(locale)
-			
-			// Cross-reference with owned games to mark ownership status (for "All Games" view)
-			val gamesWithOwnership = crossReferenceOwnership(games, npssoToken)
-			
+			val stored = preferences.getCloudLanguage()
+			val locale = com.metallic.chiaki.cloudplay.CloudLocale.toImagicLocale(stored)
+			Log.i(TAG, "PS5 catalog locale: stored=$stored imagic=$locale forceRefresh=$forceRefresh")
+
+			val catalog = (if (!forceRefresh) loadCachedPs5CatalogV3() else null)
+				?: run {
+					val fetched = pscloudCatalogService.fetchPs5CloudCatalog(locale)
+					cachePs5CatalogV3(fetched)
+					fetched
+				}
+
+			val gamesWithOwnership = crossReferenceOwnership(catalog, npssoToken)
+
 			cacheGames(gamesWithOwnership, PSCLOUD_CACHE_FILE)
 			PsnResult.Success(gamesWithOwnership)
 		}
@@ -119,22 +145,24 @@ class CloudGameRepository(
 	/**
 	 * Cross-reference public catalog with owned games to mark ownership status
 	 */
-	private suspend fun crossReferenceOwnership(publicCatalog: List<CloudGame>, npssoToken: String): List<CloudGame>
+	private suspend fun crossReferenceOwnership(catalog: Ps5CloudCatalogResult, npssoToken: String): List<CloudGame>
 	{
 		if (npssoToken.isEmpty())
+			return catalog.browseGames.map { it.copy(isOwned = false) }
+
+		return try
 		{
-			return publicCatalog.map { it.copy(isOwned = false) }
-		}
-		
-		try
-		{
-			val ownedCrossRef = pscloudCatalogService.getOwnedPs5CloudGames(npssoToken, publicCatalog)
-			return PsCloudOwnership.markAllTabOwnership(publicCatalog, ownedCrossRef)
+			val ownedCrossRef = pscloudCatalogService.getOwnedPs5CloudGames(
+				npssoToken,
+				catalog.browseGames,
+				catalog.plusLibrarySupplement
+			)
+			PsCloudOwnership.mergeOwnedIntoBrowseCatalog(catalog.browseGames, ownedCrossRef)
 		}
 		catch (e: Exception)
 		{
 			Log.w(TAG, "Failed to cross-reference ownership, returning games as not owned", e)
-			return publicCatalog.map { it.copy(isOwned = false) }
+			catalog.browseGames.map { it.copy(isOwned = false) }
 		}
 	}
 	
@@ -145,6 +173,8 @@ class CloudGameRepository(
 	{
 		return withContext(Dispatchers.IO)
 		{
+			CloudLocaleBootstrap.ensureConfigured(preferences, npssoToken)
+
 			// Owned games cache is separate from public catalog
 			val OWNED_CACHE_FILE = "pscloud_owned.json"
 			
@@ -159,15 +189,25 @@ class CloudGameRepository(
 				}
 			}
 			
-		// Fetch from network
 		Log.i(TAG, "Fetching owned PS5 games from network")
 		try
 		{
-			// Get locale from unified language setting and convert to lowercase (Qt lines 847-848)
-			val localeSetting = preferences.getCloudLanguage()
-			val locale = localeSetting.lowercase() // Convert "en-US" to "en-us"
-			
-			val games = pscloudCatalogService.fetchOwnedPs5Games(npssoToken, locale)
+			val stored = preferences.getCloudLanguage()
+			val locale = com.metallic.chiaki.cloudplay.CloudLocale.toImagicLocale(stored)
+			Log.i(TAG, "PS5 catalog locale: stored=$stored imagic=$locale forceRefresh=$forceRefresh")
+
+			val catalog = (if (!forceRefresh) loadCachedPs5CatalogV3() else null)
+				?: run {
+					val fetched = pscloudCatalogService.fetchPs5CloudCatalog(locale)
+					cachePs5CatalogV3(fetched)
+					fetched
+				}
+
+			val games = pscloudCatalogService.getOwnedPs5CloudGames(
+				npssoToken,
+				catalog.browseGames,
+				catalog.plusLibrarySupplement
+			)
 			cacheGames(games, OWNED_CACHE_FILE)
 			PsnResult.Success(games)
 		}
@@ -224,6 +264,7 @@ class CloudGameRepository(
 					platform = obj.optString("platform", "ps4"),
 					serviceType = obj.optString("serviceType", "psnow"),
 					conceptUrl = obj.optString("conceptUrl", ""),
+					conceptId = obj.optString("conceptId", ""),
 					isOwned = obj.optBoolean("isOwned", false),
 					entitlementId = obj.optString("entitlementId", ""),
 					storeProductId = obj.optString("storeProductId", "")
@@ -260,6 +301,7 @@ class CloudGameRepository(
 				obj.put("platform", game.platform)
 				obj.put("serviceType", game.serviceType)
 				obj.put("conceptUrl", game.conceptUrl)
+				obj.put("conceptId", game.conceptId)
 				obj.put("isOwned", game.isOwned)
 				obj.put("entitlementId", game.entitlementId)
 				obj.put("storeProductId", game.storeProductId)
@@ -278,6 +320,101 @@ class CloudGameRepository(
 		}
 	}
 	
+	private fun loadCachedPs5CatalogV3(): Ps5CloudCatalogResult?
+	{
+		try
+		{
+			val cacheFile = File(cacheDir, PS5_CATALOG_V3_CACHE_FILE)
+			if (!cacheFile.exists())
+				return null
+
+			val cacheAge = System.currentTimeMillis() - cacheFile.lastModified()
+			if (cacheAge > CACHE_DURATION_MS)
+			{
+				cacheFile.delete()
+				return null
+			}
+
+			val root = JSONObject(cacheFile.readText())
+			val browse = parseGameArray(root.optJSONArray("games") ?: JSONArray())
+			val supplement = parseGameArray(root.optJSONArray("plusLibrarySupplement") ?: JSONArray())
+			Log.i(TAG, "Loaded PS5 catalog v3 from cache: ${browse.size} browse, ${supplement.size} supplement")
+			return Ps5CloudCatalogResult(browse, supplement)
+		}
+		catch (e: Exception)
+		{
+			Log.w(TAG, "Error loading PS5 catalog v3 cache", e)
+			return null
+		}
+	}
+
+	private fun cachePs5CatalogV3(catalog: Ps5CloudCatalogResult)
+	{
+		try
+		{
+			val root = JSONObject()
+			root.put("games", gamesToJsonArray(catalog.browseGames))
+			root.put("plusLibrarySupplement", gamesToJsonArray(catalog.plusLibrarySupplement))
+			root.put("total", catalog.browseGames.size)
+
+			val cacheFile = File(cacheDir, PS5_CATALOG_V3_CACHE_FILE)
+			cacheFile.writeText(root.toString())
+			Log.i(TAG, "Cached PS5 catalog v3: ${catalog.browseGames.size} browse, ${catalog.plusLibrarySupplement.size} supplement")
+		}
+		catch (e: Exception)
+		{
+			Log.e(TAG, "Error caching PS5 catalog v3", e)
+		}
+	}
+
+	private fun parseGameArray(jsonArray: JSONArray): List<CloudGame>
+	{
+		val games = mutableListOf<CloudGame>()
+		for (i in 0 until jsonArray.length())
+		{
+			val obj = jsonArray.getJSONObject(i)
+			val landscapeImageUrl = obj.optString("landscapeImageUrl", obj.getString("imageUrl"))
+			games.add(
+				CloudGame(
+					productId = obj.getString("productId"),
+					name = obj.getString("name"),
+					imageUrl = obj.getString("imageUrl"),
+					landscapeImageUrl = landscapeImageUrl,
+					platform = obj.optString("platform", "ps5"),
+					serviceType = obj.optString("serviceType", "pscloud"),
+					conceptUrl = obj.optString("conceptUrl", ""),
+					conceptId = obj.optString("conceptId", ""),
+					isOwned = obj.optBoolean("isOwned", false),
+					entitlementId = obj.optString("entitlementId", ""),
+					storeProductId = obj.optString("storeProductId", "")
+				)
+			)
+		}
+		return games
+	}
+
+	private fun gamesToJsonArray(games: List<CloudGame>): JSONArray
+	{
+		val jsonArray = JSONArray()
+		for (game in games)
+		{
+			val obj = JSONObject()
+			obj.put("productId", game.productId)
+			obj.put("name", game.name)
+			obj.put("imageUrl", game.imageUrl)
+			obj.put("landscapeImageUrl", game.landscapeImageUrl)
+			obj.put("platform", game.platform)
+			obj.put("serviceType", game.serviceType)
+			obj.put("conceptUrl", game.conceptUrl)
+			obj.put("conceptId", game.conceptId)
+			obj.put("isOwned", game.isOwned)
+			obj.put("entitlementId", game.entitlementId)
+			obj.put("storeProductId", game.storeProductId)
+			jsonArray.put(obj)
+		}
+		return jsonArray
+	}
+
 	/**
 	 * Clear all cached data
 	 */
