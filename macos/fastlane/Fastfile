@@ -60,6 +60,7 @@ platform :mac do
         pkg: pkg_path,
         submit_for_review: true,
         automatic_release: false,
+        force: true,
         skip_metadata: false,
         skip_screenshots: true,
         precheck_include_in_app_purchases: false,
