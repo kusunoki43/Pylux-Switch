@@ -27,7 +27,6 @@ finish-args:
   - --filesystem=xdg-run/gamescope-0
   - --filesystem=xdg-download
   - --filesystem=~/.steam/steam
-  - --filesystem=~/.var/app/com.valvesoftware.Steam/data/Steam
 
 cleanup:
   - /include
