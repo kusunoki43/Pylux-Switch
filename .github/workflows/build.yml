@@ -1,43 +1,47 @@
-name: Build Pylux Switch
+name: Build Chiaki Switch
 
 on:
- workflow_dispatch:
+  workflow_dispatch:
 
 jobs:
- build:
-   runs-on: ubuntu-latest
-   container:
-     image: devkitpro/devkita64:latest
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
 
-   steps:
-     - name: Checkout repo
-       uses: actions/checkout@v5
-       with:
-         submodules: recursive
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
 
-     - name: Install Switch dependencies
-       run: |
-         dkp-pacman -Syu --noconfirm
-         dkp-pacman -S --noconfirm --needed \
-           libnx \
-           switch-tools \
-           switch-ffmpeg \
-           switch-sdl2 \
-           switch-libopus \
-           switch-mbedtls
+      - name: Install Switch dependencies
+        run: |
+          dkp-pacman -Syu --noconfirm
+          dkp-pacman -S --noconfirm --needed \
+            libnx \
+            switch-tools \
+            switch-ffmpeg \
+            switch-sdl2 \
+            switch-libopus \
+            switch-mbedtls
 
-     - name: Build
-       run: |
-         mkdir -p build_switch && cd build_switch
-         cmake .. \
-           -DCMAKE_TOOLCHAIN_FILE=$DEVKITPRO/cmake/Switch.cmake \
-           -DCHIAKI_ENABLE_SWITCH=ON \
-           -DCHIAKI_ENABLE_CLI=OFF \
-           -DCHIAKI_ENABLE_GUI=OFF
-         make -j$(nproc)
+      - name: Build
+        run: |
+          mkdir -p build_switch && cd build_switch
+          cmake .. \
+            -DCMAKE_TOOLCHAIN_FILE=$DEVKITPRO/cmake/Switch.cmake \
+            -DCHIAKI_ENABLE_SWITCH=ON \
+            -DCHIAKI_ENABLE_CLI=OFF \
+            -DCHIAKI_ENABLE_GUI=OFF \
+            -DCURL_USE_OPENSSL=OFF \
+            -DCURL_USE_MBEDTLS=ON \
+            -DMBEDTLS_ROOT=/opt/devkitpro/portlibs/switch \
+            -DOPENSSL_ROOT_DIR=/opt/devkitpro/portlibs/switch
+          make -j$(nproc)
 
-     - name: Upload NRO
-       uses: actions/upload-artifact@v5
-       with:
-         name: chiaki-switch
-         path: "**/*.nro"
+      - name: Upload NRO
+        uses: actions/upload-artifact@v5
+        with:
+          name: chiaki-switch
+          path: "**/*.nro"
