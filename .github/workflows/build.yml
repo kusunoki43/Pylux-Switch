@@ -1,4 +1,4 @@
-name: Build Chiaki Switch
+name: Build Pylux Switch
 
 on:
   workflow_dispatch:
