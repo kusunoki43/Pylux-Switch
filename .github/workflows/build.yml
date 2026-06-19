@@ -1,4 +1,4 @@
-name: Build Pylux Switch
+name: Build Chiaki Switch
 
 on:
   workflow_dispatch:
@@ -34,6 +34,7 @@ jobs:
             -DCHIAKI_ENABLE_SWITCH=ON \
             -DCHIAKI_ENABLE_CLI=OFF \
             -DCHIAKI_ENABLE_GUI=OFF \
+            -DCHIAKI_ENABLE_STEAM_TOOLS=OFF \
             -DCURL_USE_OPENSSL=OFF \
             -DCURL_USE_MBEDTLS=ON \
             -DMBEDTLS_ROOT=/opt/devkitpro/portlibs/switch \
