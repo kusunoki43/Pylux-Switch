@@ -6,21 +6,38 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v5
+        with:
+          submodules: recursive
 
-      - name: Install Podman
-        run: sudo apt-get install -y podman
+      - name: Install Switch dependencies
+        run: |
+          dkp-pacman -Syu --noconfirm
+          dkp-pacman -S --noconfirm \
+            switch-dev \
+            switch-ffmpeg \
+            switch-sdl2 \
+            switch-openssl \
+            switch-opus \
+            switch-mbedtls
 
       - name: Build
-        run: bash scripts/switch/run-podman-build-chiaki.sh
+        run: |
+          mkdir -p build_switch && cd build_switch
+          cmake .. \
+            -DCMAKE_TOOLCHAIN_FILE=$DEVKITPRO/cmake/Switch.cmake \
+            -DCHIAKI_ENABLE_SWITCH=ON \
+            -DCHIAKI_ENABLE_CLI=OFF \
+            -DCHIAKI_ENABLE_GUI=OFF
+          make -j$(nproc)
 
       - name: Upload NRO
         uses: actions/upload-artifact@v5
         with:
           name: chiaki-switch
-          path: |
-            **/*.nro
-            build_switch/**/*.nro
+          path: "**/*.nro"
