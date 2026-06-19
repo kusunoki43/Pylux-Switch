@@ -1,0 +1,26 @@
+name: Build Pylux Switch
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install Podman
+        run: sudo apt-get install -y podman
+
+      - name: Build
+        run: bash scripts/switch/run-podman-build-chiaki.sh
+
+      - name: Upload NRO
+        uses: actions/upload-artifact@v4
+        with:
+          name: chiaki-switch
+          path: |
+            **/*.nro
+            build_switch/**/*.nro
