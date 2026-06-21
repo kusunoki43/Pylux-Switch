@@ -35,7 +35,7 @@ Three-column diagnostic overlay showing real-time stream quality metrics during 
 Settings → General → Cloud Language dropdown. Select the language for cloud streamed games.
 
 - **5 languages** matching available datacenters: English, Deutsch, Français, Suomi, English (UK)
-- **Auto-datacenter matching**: selecting a language automatically locks the corresponding server (Deutsch → Frankfurt, English → Stockholm, etc.)
+- **Auto-datacenter matching**: selecting a language automatically locks the corresponding server (Deutsch → Frankfurt, Finnish → Stockholm, etc.)
 - **Language filtering**: only shows languages that have matching datacenters in your ping results
 - Games now respect your chosen language when paired with the correct datacenter
 
