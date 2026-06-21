@@ -267,7 +267,9 @@ class Preferences(context: Context)
 		val locale = com.metallic.chiaki.cloudplay.CloudLocale.fromSession(language, country) ?: return
 		setCloudLanguage(locale)
 	}
-	
+
+	val cloudLanguageKey get() = resources.getString(R.string.preferences_cloud_language_key)
+
 	// Cloud resolution settings (matching Qt GetCloudResolutionPSNOW/SetCloudResolutionPSNOW)
 	val cloudResolutionPsnowKey get() = resources.getString(R.string.preferences_cloud_resolution_psnow_key)
 	fun getCloudResolutionPsnow(): Int

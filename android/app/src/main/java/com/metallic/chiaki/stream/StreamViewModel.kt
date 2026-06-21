@@ -115,7 +115,6 @@ class StreamViewModel(val application: Application, val connectInfo: ConnectInfo
 	{
 		super.onCleared()
 		stopMetricsPolling()
-		input.release()
 		session.shutdown()
 	}
 

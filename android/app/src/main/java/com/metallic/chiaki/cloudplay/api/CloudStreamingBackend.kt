@@ -245,7 +245,8 @@ class CloudStreamingBackend(
 				mtuIn = allocationResult.mtuIn,
 				mtuOut = allocationResult.mtuOut,
 				rttMs = allocationResult.rttMs,
-				serviceType = serviceType
+				serviceType = serviceType,
+				datacenterName = allocationResult.datacenterName
 			)
 			
 			Log.i(TAG, "=== Cloud Streaming Session Ready ===")

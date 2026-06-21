@@ -103,7 +103,8 @@ class PSGaikaiStreaming(
 		val psnWrapperType: Int = 0,
 		val mtuIn: Int = 0,
 		val mtuOut: Int = 0,
-		val rttMs: Int = 0
+		val rttMs: Int = 0,
+		val datacenterName: String = ""
 	)
 	
 	/**
@@ -284,7 +285,8 @@ class PSGaikaiStreaming(
 				psnWrapperType = psnWrapperType,
 				mtuIn = selectedDatacenterPingResult.optInt("mtu_in", 1454),
 				mtuOut = selectedDatacenterPingResult.optInt("mtu_out", 1254),
-				rttMs = selectedDatacenterPingResult.optInt("rtt", 20)
+				rttMs = selectedDatacenterPingResult.optInt("rtt", 20),
+				datacenterName = selectedDatacenter
 			)
 		}
 		catch (e: PsPlusSubscriptionException)
@@ -1382,7 +1384,9 @@ catch (e: Exception)
 	
 	// Read language from unified settings (Qt lines 153, 161)
 	// Use unified language setting for both PSCloud and PSNOW
-	val language = preferences.getCloudLanguage()
+	// Gaikai expects just the language code ("de"), not locale ("de-DE")
+	val locale = preferences.getCloudLanguage()
+	val language = locale.split("-").firstOrNull()?.lowercase() ?: "en"
 	spec.put("language", language)
 	
 	spec.put("cloudEndpoint", "https://cc.prod.gaikai.com")

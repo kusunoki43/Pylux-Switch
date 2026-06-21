@@ -197,6 +197,36 @@
         <item>1080</item>
     </string-array>
     
+    <!-- Cloud language options -->
+    <string-array name="cloud_language_entries">
+        <item>English (US)</item>
+        <item>English (UK)</item>
+        <item>Deutsch</item>
+        <item>Français</item>
+        <item>Italiano</item>
+        <item>Español</item>
+        <item>Português (Brasil)</item>
+        <item>Nederlands</item>
+        <item>Suomi</item>
+        <item>日本語</item>
+        <item>한국어</item>
+    </string-array>
+    <string-array name="cloud_language_values">
+        <item>en-US</item>
+        <item>en-GB</item>
+        <item>de-DE</item>
+        <item>fr-FR</item>
+        <item>it-IT</item>
+        <item>es-ES</item>
+        <item>pt-BR</item>
+        <item>nl-NL</item>
+        <item>fi-FI</item>
+        <item>ja-JP</item>
+        <item>ko-KR</item>
+        <item>zh-Hans</item>
+        <item>zh-Hant</item>
+    </string-array>
+
     <!-- Resolution options for Game Library (PSCloud) - up to 4K -->
     <string-array name="cloud_resolution_pscloud_entries">
         <item>720p (1280x720)</item>
@@ -238,6 +268,9 @@
     <string name="preferences_show_performance_overlay_title">Performance overlay</string>
     <string name="preferences_show_performance_overlay_summary">Show bitrate, latency, and packet loss during streaming</string>
     <string name="preferences_pip_enabled_key">pip_enabled</string>
+    <string name="preferences_cloud_language_key" translatable="false">cloud_language_pscloud</string>
+    <string name="preferences_cloud_language_title">Cloud Language</string>
+    <string name="preferences_cloud_language_summary">Select the language for cloud streaming games. This affects in-game text and audio language.</string>
 
     <string name="donation_dialog_title">Support Pylux</string>
     <string name="donation_dialog_body">Pylux is built by the community. If you enjoy using it, please consider supporting its development. Your contribution helps fund continued updates and keeps the project alive.</string>

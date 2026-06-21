@@ -6,6 +6,12 @@ object CloudLocale
 {
 	const val DEFAULT = "en-US"
 
+	/** Locale codes supported for cloud streaming language selection. */
+	val SUPPORTED_LOCALES = listOf(
+		"en-US", "en-GB", "de-DE", "fr-FR", "it-IT", "es-ES",
+		"pt-BR", "nl-NL", "fi-FI", "ja-JP", "ko-KR"
+	)
+
 	fun toImagicLocale(stored: String): String = stored.lowercase()
 
 	fun parseStorePath(stored: String): Pair<String, String>
@@ -23,6 +29,46 @@ object CloudLocale
 		if (lang.isEmpty() || cty.isEmpty())
 			return null
 		return "$lang-${cty.uppercase()}"
+	}
+
+	/**
+	 * Map datacenter prefix (first 3 chars of 4-letter code) to the locales it serves.
+	 * Game language is tied to the datacenter region.
+	 */
+	private val DATACENTER_LOCALE_MAP: Map<String, List<String>> = mapOf(
+		"fra" to listOf("de-DE"),           // Frankfurt, Germany
+		"lon" to listOf("en-GB"),           // London, UK
+		"sto" to listOf("en-GB", "fi-FI"),  // Stockholm, Nordic
+		"mil" to listOf("it-IT"),           // Milan, Italy
+		"par" to listOf("fr-FR"),           // Paris, France
+		"ams" to listOf("nl-NL"),           // Amsterdam, Netherlands
+		"mad" to listOf("es-ES"),           // Madrid, Spain
+		"sao" to listOf("pt-BR"),           // Sao Paulo, Brazil
+		"tyo" to listOf("ja-JP"),           // Tokyo, Japan
+		"osa" to listOf("ja-JP"),           // Osaka, Japan
+		"sel" to listOf("ko-KR"),           // Seoul, Korea
+		"sjc" to listOf("en-US"),           // San Jose, US West
+		"iad" to listOf("en-US"),           // Washington DC, US East
+	)
+
+	/** Get the datacenter prefix for a given locale (e.g. "de-DE" → "fra"). */
+	fun localeToDatacenterPrefix(locale: String): String? =
+		DATACENTER_LOCALE_MAP.entries.firstOrNull { locale in it.value }?.key
+
+	/** Get all locales served by a given datacenter name (e.g. "stoa" → ["en-GB", "fi-FI"]). */
+	fun datacenterToLocales(datacenterName: String): List<String> =
+		DATACENTER_LOCALE_MAP[datacenterName.take(3).lowercase()] ?: emptyList()
+
+	/**
+	 * Filter locales to only those that have at least one matching datacenter
+	 * in the provided list of datacenter names.
+	 */
+	fun filterLocalesByDatacenters(locales: List<String>, datacenterNames: List<String>): List<String>
+	{
+		if (datacenterNames.isEmpty()) return locales
+		val availableLocales = datacenterNames.flatMap { datacenterToLocales(it) }.toSet()
+		if (availableLocales.isEmpty()) return locales
+		return locales.filter { it in availableLocales }
 	}
 
 	/** Non-fatal warning when locale could not be learned from Kamaji (catalog may use en-US). */

@@ -1593,7 +1593,8 @@ class CloudPlayFragment : Fragment()
 			cloudPsnWrapperType = session.psnWrapperType,
 			cloudMtuIn = session.mtuIn,
 			cloudMtuOut = session.mtuOut,
-			cloudRttUs = session.rttMs.toLong() * 1000L  // Convert ms to microseconds
+			cloudRttUs = session.rttMs.toLong() * 1000L,  // Convert ms to microseconds
+			serverName = session.datacenterName  // Show datacenter in overlay
 		)
 		
 		// Launch StreamActivity

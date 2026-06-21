@@ -23,6 +23,15 @@
             app:summary="@string/preferences_psn_login_summary"
             app:icon="@drawable/ic_console_simple"/>
 
+        <ListPreference
+            app:key="@string/preferences_cloud_language_key"
+            app:title="@string/preferences_cloud_language_title"
+            app:summary="%s"
+            app:entries="@array/cloud_language_entries"
+            app:entryValues="@array/cloud_language_values"
+            app:defaultValue="en-US"
+            app:icon="@drawable/ic_resolution"/>
+
         <Preference
             app:key="registered_hosts"
             tools:summary="@string/preferences_registered_hosts_summary"

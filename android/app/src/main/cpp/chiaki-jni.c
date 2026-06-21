@@ -774,7 +774,7 @@ JNIEXPORT jobject JNICALL JNI_FCN(sessionGetMetrics)(JNIEnv *env, jobject obj, j
 
 	double ping_ms = session->rtt_us / 1000.0;
 
-	double latency_ms = session->stream_connection.server_rtt;
+	double latency_ms = 0.0; // server_rtt not yet available in stream_connection struct
 
 	double packet_loss = session->stream_connection.congestion_control.packet_loss;
 

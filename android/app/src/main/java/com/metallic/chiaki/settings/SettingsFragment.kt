@@ -15,6 +15,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.preference.*
 import com.metallic.chiaki.common.ext.alertDialogBuilder
 import com.pylux.stream.R
+import com.metallic.chiaki.cloudplay.CloudLocale
 import com.metallic.chiaki.cloudplay.PsnLoginActivity
 import com.metallic.chiaki.cloudplay.repository.CloudGameRepository
 import com.metallic.chiaki.common.DonationPromptCoordinator
@@ -62,6 +63,7 @@ class DataStore(val preferences: Preferences): PreferenceDataStore()
 		preferences.fpsKey -> preferences.fps.value
 		preferences.bitrateKey -> preferences.bitrate?.toString() ?: ""
 		preferences.codecKey -> preferences.codec.value
+		preferences.cloudLanguageKey -> preferences.getCloudLanguage()
 		preferences.cloudDatacenterPsnowKey -> preferences.getCloudDatacenterPsnow()
 		preferences.cloudDatacenterPscloudKey -> preferences.getCloudDatacenterPscloud()
 		preferences.cloudResolutionPscloudKey -> preferences.getCloudResolutionPscloud().toString()
@@ -89,6 +91,7 @@ class DataStore(val preferences: Preferences): PreferenceDataStore()
 				val codec = Preferences.Codec.values().firstOrNull { it.value == value } ?: return
 				preferences.codec = codec
 			}
+			preferences.cloudLanguageKey -> preferences.setCloudLanguage(value ?: CloudLocale.DEFAULT)
 			preferences.cloudDatacenterPsnowKey -> preferences.setCloudDatacenterPsnow(value ?: "Auto")
 			preferences.cloudDatacenterPscloudKey -> preferences.setCloudDatacenterPscloud(value ?: "Auto")
 			preferences.cloudResolutionPscloudKey -> preferences.setCloudResolutionPscloud(value?.toIntOrNull() ?: 720)
@@ -225,6 +228,10 @@ class SettingsFragment: PreferenceFragmentCompat(), TitleFragment
 			it.entryValues = Preferences.codecAll.map { codec -> codec.value }.toTypedArray()
 			it.entries = Preferences.codecAll.map { codec -> getString(codec.title) }.toTypedArray()
 		}
+
+		// Tie language to datacenter: filter languages by available datacenters
+		// and auto-select datacenter when language changes
+		bindCloudLanguageToDatacenter(preferenceScreen, preferences)
 
 		val registeredHostsPreference = preferenceScreen.findPreference<Preference>("registered_hosts")
 		viewModel.registeredHostsCount.observe(this, Observer {
@@ -460,6 +467,59 @@ class SettingsFragment: PreferenceFragmentCompat(), TitleFragment
 			// If JSON parsing fails, fall back to Auto only
 			preference.entries = arrayOf("Auto (Best Ping)")
 			preference.entryValues = arrayOf("Auto")
+		}
+	}
+
+	/**
+	 * Tie language selection to datacenter selection:
+	 * - Filter language list to only show languages with matching datacenters available
+	 * - Auto-select the matching datacenter when language changes
+	 */
+	private fun bindCloudLanguageToDatacenter(preferenceScreen: PreferenceScreen, preferences: Preferences)
+	{
+		val languagePref = preferenceScreen.findPreference<ListPreference>(getString(R.string.preferences_cloud_language_key)) ?: return
+		val dcPref = preferenceScreen.findPreference<ListPreference>(getString(R.string.preferences_cloud_datacenter_pscloud_key))
+			?: preferenceScreen.findPreference<ListPreference>(getString(R.string.preferences_cloud_datacenter_psnow_key))
+
+		// Get available datacenter names from saved ping results
+		val dcJson = preferences.getCloudDatacentersJsonPscloud().ifEmpty {
+			preferences.getCloudDatacentersJsonPsnow()
+		}
+		val datacenterNames = try {
+			val arr = org.json.JSONArray(dcJson)
+			(0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("dataCenter", "") }.filter { it.isNotEmpty() }
+		} catch (_: Exception) { emptyList() }
+
+		// Filter language entries to only those with matching datacenters
+		if (datacenterNames.isNotEmpty()) {
+			val xmlEntries = resources.getStringArray(R.array.cloud_language_entries)
+			val xmlValues = resources.getStringArray(R.array.cloud_language_values)
+
+			val filtered = xmlValues.zip(xmlEntries).filter { (locale, _) ->
+				CloudLocale.localeToDatacenterPrefix(locale)?.let { prefix ->
+					datacenterNames.any { it.startsWith(prefix, ignoreCase = true) }
+				} ?: false // hide if no datacenter mapping exists
+			}
+			// Always keep en-US as fallback
+			val filteredLocales = filtered.map { it.first }.toSet()
+			val keepLocales = if ("en-US" in filteredLocales) filteredLocales else filteredLocales + "en-US"
+			val final = xmlValues.zip(xmlEntries).filter { (locale, _) -> locale in keepLocales }
+
+			languagePref.entryValues = final.map { it.first }.toTypedArray()
+			languagePref.entries = final.map { it.second }.toTypedArray()
+		}
+
+		// Auto-select datacenter when language changes
+		languagePref.onPreferenceChangeListener = Preference.OnPreferenceChangeListener { _, newValue ->
+			val locale = newValue as? String ?: return@OnPreferenceChangeListener true
+			val prefix = CloudLocale.localeToDatacenterPrefix(locale) ?: return@OnPreferenceChangeListener true
+			dcPref?.let {
+				val dcName = it.entryValues?.firstOrNull { v -> v.toString().startsWith(prefix, ignoreCase = true) }
+				if (dcName != null) {
+					it.value = dcName.toString()
+				}
+			}
+			true
 		}
 	}
 }

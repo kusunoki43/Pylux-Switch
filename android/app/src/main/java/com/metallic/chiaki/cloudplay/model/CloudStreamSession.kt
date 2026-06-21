@@ -18,6 +18,7 @@ data class CloudStreamSession(
 	val mtuIn: Int,
 	val mtuOut: Int,
 	val rttMs: Int,
-	val serviceType: String // "psnow" or "pscloud"
+	val serviceType: String, // "psnow" or "pscloud"
+	val datacenterName: String? = null // selected datacenter name for overlay display
 )
 
